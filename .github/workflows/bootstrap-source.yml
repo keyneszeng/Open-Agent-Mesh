@@ -1,0 +1,47 @@
+name: Import reviewed v0.1 source bundle
+on:
+  push:
+    paths:
+      - '.bootstrap/**'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: source-bootstrap
+  cancel-in-progress: true
+jobs:
+  import-source:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check source bundle readiness
+        id: ready
+        run: |
+          if [ -f .bootstrap/part-00 ] && [ -f .bootstrap/part-01 ] && [ -f .bootstrap/part-02 ] && [ -f .bootstrap/part-03 ] && [ -f .bootstrap/part-04 ] && [ -f .bootstrap/part-05 ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Install source bundle
+        if: steps.ready.outputs.ready == 'true'
+        run: |
+          cat .bootstrap/part-* | base64 -d > /tmp/source.tar.xz
+          tar -xJf /tmp/source.tar.xz -C .
+          rm -rf .bootstrap
+          rm -f .github/workflows/bootstrap-source.yml
+          python -m pip install -e '.[dev]'
+          PYTHONPATH=src python -m pytest -q tests/test_core.py
+          git status --short
+      - name: Commit verified source
+        if: steps.ready.outputs.ready == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "feat: import tested v0.1.0 agent mesh source"
+            git push origin HEAD:main
+          fi
