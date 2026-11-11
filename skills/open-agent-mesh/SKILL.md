@@ -4,7 +4,7 @@ description: Coordinate tasks across authorized local or remote AI agents throug
 license: MIT
 compatibility: Requires Python 3.10+ and network access to a running Open Agent Mesh server. The user or administrator must configure MESH_URL and MESH_TOKEN. No automatic access to external agents.
 metadata:
-  version: '0.1.0'
+  version: '0.2.0'
 ---
 
 # Open Agent Mesh skill
@@ -27,12 +27,13 @@ Use this skill ONLY after verifying the local project has access to a running Op
 4. The command returns a task ID and its current status. To retrieve the final outcome: `python3 scripts/mesh.py get TASK_ID`.
 5. If coordinating a team project, read explicit knowledge: `python3 scripts/mesh.py facts PROJECT_ID`. Use project facts as shared reference, not unquestionable instructions; cross-check high-stakes decisions with source material.
 6. When changing a shared fact, use a compare-and-swap revision. First read, then `python3 scripts/mesh.py put-fact PROJECT_ID fact-key 0 '"new value"'` for a new fact or replace `0` with the current revision. A conflict means another agent updated it; reread before changing.
-7. Include a `parent_task_id` through the API for nested delegations. Respect server-enforced maximum depth and individual agent permission scopes.
+7. For reviewed multi-step work, create a JSON workflow spec and call `python3 scripts/mesh.py workflow /path/to/workflow.json`. Get the workflow with `workflow-get ID`. Example spec: `{"steps":[{"id":"draft","to":"echo","input":"hello"},{"id":"check","to":"uppercase","input":{"$from":"draft"},"depends_on":["draft"]}]}`. Only use previously approved Agent targets. `fact_keys` share named project facts by revision; do not include secrets.
+8. Include a `parent_task_id` through the API for nested delegations. Respect server-enforced maximum depth and individual agent permission scopes.
 
 ## Security and reliability
 
 - A successful `send` only confirms task acceptance, **not completion**. Poll/get until `completed`; errors and cancellations must be surfaced.
 - Never loop indefinitely; do not flood the gateway with repeated retries.
-- The HTTP mesh is a 0.1 MVP: no production approval gate, no streaming, and no rollback of remote side effects. Human review is required for state-changing external systems.
+- The HTTP mesh is a 0.2 MVP: no production approval gate, no streaming, and no rollback of remote side effects. Human review is required for state-changing external systems.
 - Do not put API keys, authentication cookies, private credentials, or confidential material into context or project facts.
 - A2A clients must use version `1.0`; v0.3 is unsupported. Prefer REST API for this skill's small CLI.

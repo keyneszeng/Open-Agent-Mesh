@@ -41,6 +41,12 @@ def main():
     send.add_argument('--parent', default=None)
     get = commands.add_parser('get')
     get.add_argument('task_id')
+    flow = commands.add_parser('workflow')
+    flow.add_argument('spec_file', help='JSON file containing steps and optional project_id')
+    flow_get = commands.add_parser('workflow-get')
+    flow_get.add_argument('workflow_id')
+    flow_cancel = commands.add_parser('workflow-cancel')
+    flow_cancel.add_argument('workflow_id')
     facts = commands.add_parser('facts')
     facts.add_argument('project')
     put = commands.add_parser('put-fact')
@@ -56,6 +62,13 @@ def main():
                                                'parent_task_id': args.parent})
     elif args.command == 'get':
         result = request('/v1/tasks/' + segment(args.task_id))
+    elif args.command == 'workflow':
+        with open(args.spec_file, encoding='utf-8') as spec:
+            result = request('/v1/workflows', 'POST', json.load(spec))
+    elif args.command == 'workflow-get':
+        result = request('/v1/workflows/' + segment(args.workflow_id))
+    elif args.command == 'workflow-cancel':
+        result = request('/v1/workflows/' + segment(args.workflow_id) + '/cancel', 'POST')
     elif args.command == 'facts':
         result = request('/v1/projects/' + segment(args.project) + '/facts')
     else:

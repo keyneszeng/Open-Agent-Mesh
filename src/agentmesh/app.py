@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from .config import AgentSpec, load_agents, load_tokens
 from .runner import run_agent
 from .store import Store, TERMINAL, public_task
+from .workflows import WorkflowEngine, install_workflow_api
 
 
 class CreateTask(BaseModel):
@@ -63,6 +64,7 @@ def create_app(*, config_path: str | None = None, db_path: str | None = None,
     store = Store(db_path or os.environ.get("MESH_DB_PATH", "/tmp/agentmesh.sqlite3"))
     base = (public_url or os.environ.get("MESH_PUBLIC_URL", "http://127.0.0.1:8765")).rstrip("/")
     in_flight: set[asyncio.Task] = set()
+    workflows = WorkflowEngine(store)
 
     async def execute(row):
         try:
@@ -80,6 +82,7 @@ def create_app(*, config_path: str | None = None, db_path: str | None = None,
 
     async def worker():
         while True:
+            workflows.tick()
             # Single-process async worker with bounded in-flight concurrency.
             while len(in_flight) < 4:
                 row = store.claim()
@@ -106,8 +109,9 @@ def create_app(*, config_path: str | None = None, db_path: str | None = None,
             if in_flight:
                 await asyncio.gather(*in_flight, return_exceptions=True)
 
-    app = FastAPI(title="Open Agent Mesh", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Open Agent Mesh", version="0.2.0", lifespan=lifespan)
     app.state.store = store
+    app.state.workflows = workflows
 
     def identity(authorization: str | None = Header(default=None)) -> dict:
         if not authorization or not authorization.startswith("Bearer "):
@@ -156,7 +160,7 @@ def create_app(*, config_path: str | None = None, db_path: str | None = None,
                 "name": agent.name, "description": agent.description,
                 "supportedInterfaces": [{"url": f"{base}/a2a/{agent_id}",
                                          "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}],
-                "version": "0.1.0", "capabilities": {"streaming": False, "pushNotifications": False},
+                "version": "0.2.0", "capabilities": {"streaming": False, "pushNotifications": False},
                 "securitySchemes": {"bearer": {"httpAuthSecurityScheme": {"scheme": "Bearer"}}},
                 "security": [{"bearer": []}],
                 "defaultInputModes": ["text/plain", "application/json"],
@@ -168,7 +172,7 @@ def create_app(*, config_path: str | None = None, db_path: str | None = None,
         return {
             "name": "Open Agent Mesh Router", "description": "Route to a configured agent using params.metadata.meshTarget",
             "supportedInterfaces": [{"url": f"{base}/a2a", "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}],
-            "version": "0.1.0", "capabilities": {"streaming": False, "pushNotifications": False},
+            "version": "0.2.0", "capabilities": {"streaming": False, "pushNotifications": False},
             "securitySchemes": {"bearer": {"httpAuthSecurityScheme": {"scheme": "Bearer"}}},
             "security": [{"bearer": []}],
             "defaultInputModes": ["text/plain", "application/json"],
@@ -196,12 +200,15 @@ def create_app(*, config_path: str | None = None, db_path: str | None = None,
                  "a2a_card": f"{base}/agents/{x.id}/.well-known/agent-card.json"}
                 for x in registry.values() if can_use(profile, x.id)]
 
-    def check_project(project_id: str, profile: dict, key: str | None = None):
+    def check_project(project_id: str, profile: dict, key: str | None = None, write: bool = False):
         if not re.fullmatch(r"[a-zA-Z0-9_.-]{1,80}", project_id):
             raise HTTPException(400, "Invalid project ID")
         if key is not None and not re.fullmatch(r"[a-zA-Z0-9_.-]{1,80}", key):
             raise HTTPException(400, "Invalid fact key")
-        if profile.get("role") != "admin" and project_id not in profile.get("allowed_projects", []):
+        roles = profile.get("project_roles", {})
+        role = roles.get(project_id)
+        legacy_editor = project_id in profile.get("allowed_projects", [])
+        if profile.get("role") != "admin" and not (legacy_editor or (role == "editor" if write else role in ("reader", "editor"))):
             raise HTTPException(403, "Project not allowed")
 
     @app.get("/v1/projects/{project_id}/facts")
@@ -219,7 +226,7 @@ def create_app(*, config_path: str | None = None, db_path: str | None = None,
 
     @app.put("/v1/projects/{project_id}/facts/{key}")
     async def put_project_fact(project_id: str, key: str, payload: FactChange, profile: dict = Depends(identity)):
-        check_project(project_id, profile, key)
+        check_project(project_id, profile, key, write=True)
         try:
             return store.put_fact(project_id, key, payload.value, profile["name"], payload.expected_revision)
         except ValueError as exc:
@@ -351,4 +358,5 @@ def create_app(*, config_path: str | None = None, db_path: str | None = None,
             raise HTTPException(403, "Agent not allowed")
         return await rpc(agent_id, request, profile)
 
+    install_workflow_api(app, workflows, identity, registry, can_use, check_project)
     return app

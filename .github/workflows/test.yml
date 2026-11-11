@@ -15,5 +15,5 @@ jobs:
         with:
           node-version: '22'
       - run: python -m pip install -e '.[dev]'
-      - run: python -m pytest -q tests/test_core.py
+      - run: python -m pytest -q
       - run: PYTHONPATH=src python tests/smoke_network.py

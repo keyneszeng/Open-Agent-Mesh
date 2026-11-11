@@ -31,3 +31,8 @@ flowchart LR
 ## Missing before Internet/public production
 
 Externalized identity (OIDC / mTLS); multi-tenant isolation; quotas and rate limits; durable work leases and retry/DLQ; per-action human approvals; secure artifact storage; TLS; signed/verifiable Agent Cards; network egress policy; DNS pinning; full A2A SDK compliance testing; observability/tracing; payload size limit at reverse proxy; prompt-injection protections in delegated content; test against third-party agent implementations.
+
+
+## v0.2 persisted coordinator
+
+`WorkflowEngine` records explicit DAGs in `workflows`, `workflow_steps`, and `workflow_events` alongside the existing task journal. One background loop polls DAGs and submits ready steps via the same authenticated task storage path, with deterministic workflow step attempt idempotency keys. Deployed as a single process; **do not enable multiple server worker processes**. A crash between an external agent effect and task status persistence can still cause replay. Only project facts explicitly named by `fact_keys` are copied (revision-pinned) into a step context. Legacy `allowed_projects` grants editor access; fine-grained `project_roles` supports reader/editor. Store content is not encrypted at rest.
