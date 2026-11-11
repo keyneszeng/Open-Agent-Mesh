@@ -39,6 +39,22 @@ class MeshClient:
             "context": context or {}, "idempotency_key": idempotency_key,
             "parent_task_id": parent_task_id})
 
+    def submit_workflow(self, steps, *, project_id=None, idempotency_key=None):
+        return self._call("/v1/workflows", "POST", {"steps": steps,
+            "project_id": project_id, "idempotency_key": idempotency_key})
+
+    def workflow(self, workflow_id):
+        return self._call("/v1/workflows/" + urllib.parse.quote(workflow_id, safe=""))
+
+    def wait_workflow(self, workflow_id, *, seconds=120, interval=0.25):
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            flow = self.workflow(workflow_id)
+            if flow["state"] in ("completed", "failed", "canceled"):
+                return flow
+            time.sleep(interval)
+        raise TimeoutError("Workflow still running; retrieve it again by workflow ID")
+
     def get(self, task_id):
         return self._call("/v1/tasks/" + task_id)
 

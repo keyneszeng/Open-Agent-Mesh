@@ -73,4 +73,7 @@ def load_tokens() -> dict:
             raise ValueError("allowed_agents must be a list")
         if not isinstance(profile.get("allowed_projects", []), list):
             raise ValueError("allowed_projects must be a list")
+        roles = profile.get("project_roles", {})
+        if not isinstance(roles, dict) or any(v not in ("reader", "editor") for v in roles.values()):
+            raise ValueError("project_roles must map project IDs to reader or editor")
     return data

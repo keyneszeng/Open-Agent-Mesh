@@ -1,4 +1,4 @@
-# Open Agent Mesh — 通用 Agent 协作网关 v0.1
+# Open Agent Mesh — 通用 Agent 协作网关 v0.2
 
 本项目旨在提炼 Cursor Projects 类似的跨 Agent 协作思想，用开放标准实现一个**与具体大模型厂商无关的通用协作层**。
 
@@ -14,7 +14,7 @@
 | 项目知识库 | 不同 Agent 对齐业务规则，记录修改版本 | SQLite + 版本冲突检查 |
 | 任务队列 | 提交、完成、失败、取消、记录事件 | 已实现 |
 | 权限治理 | Token、Agent 调用范围、项目可访问范围 | 适用本地 MVP |
-| 主动智能协调 Agent | 自动规划、分工与解决冲突 | **尚未实现**，目前可由用户自定义协调器 |
+| 持久化 DAG 协调器 | 多步骤依赖、结果传递、有限重试、取消、审计 | **v0.2 已实现**，仍是规则驱动，不是 LLM 自主规划 |
 | MCP、SSE、审批、分布式执行 | 完整 Agent 生态协作 | 后续研发 |
 
 ## 二、五分钟本地运行
@@ -60,10 +60,19 @@ Swagger API 文档：`http://127.0.0.1:8765/docs`。
 
 ## 五、实际测试
 
-- 本地自动化测试：`PYTHONPATH=src pytest -q`（24 项通过）。
+- 本地自动化测试：`PYTHONPATH=src pytest -q`（40 项通过）。
 - 跨进程联调：`PYTHONPATH=src python tests/smoke_network.py`。此测试在不同端口启动两个网关和一个 HTTP Agent，验证 A2A JSON-RPC 转发、HTTP 转发、Node 客户端和 Skill CLI。
 
-## 六、仍需解决的工程问题
+## 六、v0.2 工作流演示
+
+```bash
+python skills/open-agent-mesh/scripts/mesh.py workflow examples/workflow.json
+python skills/open-agent-mesh/scripts/mesh.py workflow-get WORKFLOW_ID
+```
+
+现在可在 `POST /v1/workflows` 提交多步骤 DAG，支持依赖、输出引用、有限重试与单机重启恢复。单独新增 `project_roles` 中的 `reader` / `editor` 项目权限，工作流可以按需固定选定项目事实版本并传入指定 Agent。详细协议、示例和安全边界见 [工作流使用说明](docs/WORKFLOWS.zh-CN.md)。
+
+## 七、仍需解决的工程问题
 
 当前不支持 A2A 1.0 的全部功能，例如流式 SSE、推送通知、文件类型、会话中断后继续、全面的多租户和完整协议信息校验。执行采用单机 SQLite 与内存调度；崩溃后重新入队的远端任务存在重复执行风险，取消并不撤销远端副作用。需要在生产之前完成持久化工作租约、幂等执行、访问审计、限流、OIDC/mTLS、Agent Card 校验、人工审批和第三方一致性测试。
 

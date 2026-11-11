@@ -79,3 +79,9 @@ Independent implementation inspired by open agent collaboration patterns and Cur
 - Cursor Projects: https://cursor.com/blog/projects-multiplayer
 
 **License:** MIT.
+
+## v0.2: persisted workflow coordinator
+
+The `POST /v1/workflows` endpoint accepts up to 24 explicitly authorized steps, with `depends_on`, nested `{"$from":"step"}` output references, bounded retries (`max_attempts` 1–3), and optional project fact keys pinned by revision at submission. Independent branches are dispatched concurrently; failed dependencies skip their dependents. Workflow state and events survive process restarts on the existing SQLite instance. See [`docs/WORKFLOWS.zh-CN.md`](docs/WORKFLOWS.zh-CN.md) and [`examples/workflow.json`](examples/workflow.json).
+
+The caller remains responsible for choosing and authorizing the DAG; this is **not** autonomous LLM planning, full A2A conformance, durable distributed scheduling, or production-grade credential isolation. `project_roles` adds `reader` and `editor` fact permissions, with legacy `allowed_projects` remaining read-write.
