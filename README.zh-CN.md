@@ -1,4 +1,4 @@
-# Open Agent Mesh — 通用 Agent 协作网关 v0.3
+# Open Agent Mesh — 通用 Agent 协作网关 v0.4
 
 本项目旨在提炼 Cursor Projects 类似的跨 Agent 协作思想，用开放标准实现一个**与具体大模型厂商无关的通用协作层**。
 
@@ -86,3 +86,12 @@ python skills/open-agent-mesh/scripts/mesh.py workflow-get WORKFLOW_ID
 本版新增 **SQLite 任务租约/心跳/过期回收**、强制 **Agent 人工审批门禁**、**MCP 2026-07-28 JSON-response 工具接口子集**，以及真实进程 SIGKILL、重启、负载和随机化测试。示例配置中 `gated-demo` 为需审批的演示 Agent，直接提交会被拒绝，只能经工作流审核后运行。
 
 **请按 [v0.3 可靠性与安全说明](docs/RELIABILITY-v0.3.zh-CN.md) 与 [多轮测试计划](docs/TEST_PLAN-v0.3.zh-CN.md) 操作。** 不支持生产级多副本 DAG、OIDC、完整 MCP/A2A、端到端 exactly-once。
+
+
+## 九、v0.4：跨 Agent 多轮会话引擎
+
+现在可创建包含 1–8 个授权 Agent 的会话、发送指定收件人的消息、查看持久化历史，并由人类启动 **2–20 轮**自动接力讨论（整个会话最多 40 轮）。同一 `contextId` 的 A2A 新任务可继承有界上下文。权限认证绑定发言者身份，审批门禁无法通过对话绕过。
+
+接入方式包括 Python `MeshClient`、通用 HTTP API、MCP 工具子集，以及 Agent Skill `chat-*` 命令。使用示例、完整边界与多轮测试见 [v0.4 跨 Agent 对话设计说明](docs/CONVERSATIONS-v0.4.zh-CN.md)。
+
+**注意：** 提供的是持久化、限轮的会话协调原型，不是已经验证的 ChatGPT/Claude/Cursor 原生直连，也不是实时 WebSocket 聊天或完整 A2A/MCP 一致性实现。

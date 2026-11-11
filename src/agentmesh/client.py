@@ -83,3 +83,27 @@ class MeshClient:
         if result["state"] != "completed":
             raise RuntimeError("Task did not complete: " + str(result["error"]))
         return result["output"]
+
+    def create_conversation(self, title, participants, *, project_id=None, max_turns=12):
+        return self._call("/v1/conversations", "POST", {"title": title, "participants": participants,
+                          "project_id": project_id, "max_turns": max_turns})
+
+    def conversation(self, conversation_id):
+        return self._call("/v1/conversations/" + urllib.parse.quote(conversation_id, safe=""))
+
+    def conversation_messages(self, conversation_id, *, after=0):
+        return self._call("/v1/conversations/" + urllib.parse.quote(conversation_id, safe="") +
+                          f"/messages?after={after}")
+
+    def send_conversation_message(self, conversation_id, to, text, *, idempotency_key=None):
+        return self._call("/v1/conversations/" + urllib.parse.quote(conversation_id, safe="") +
+                          "/messages", "POST", {"to": to, "text": text, "idempotency_key": idempotency_key})
+
+    def start_discussion(self, conversation_id, prompt, *, rounds=4, idempotency_key=None):
+        return self._call("/v1/conversations/" + urllib.parse.quote(conversation_id, safe="") +
+                          "/discussions", "POST", {"prompt": prompt, "rounds": rounds,
+                                                   "idempotency_key": idempotency_key})
+
+    def close_conversation(self, conversation_id):
+        return self._call("/v1/conversations/" + urllib.parse.quote(conversation_id, safe="") +
+                          "/close", "POST")

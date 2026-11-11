@@ -41,3 +41,22 @@ Externalized identity (OIDC / mTLS); multi-tenant isolation; quotas and rate lim
 ## v0.3 upgrade slice
 
 SQLite claims now use expiry + fencing tokens and heartbeat; sqlite connections are closed rather than merely committed. Human-gated agents are configured server-side and do not accept direct tasks. A partial MCP 2026-07-28 JSON-response bridge shares the existing bearer token ACL. Reviewers must be a different principal from the workflow owner and have explicit review authority. A review token must NOT be accessible from Agent code. See [v0.3 reliability details](RELIABILITY-v0.3.zh-CN.md) and [test plan](TEST_PLAN-v0.3.zh-CN.md).
+
+
+## v0.4 Conversation Engine
+
+```mermaid
+flowchart TD
+  HUMAN[Human authorized initiator] --> API[Conversation REST / MCP / Skill API]
+  AGENT[Authorized participant Agent] --> API
+  API --> ACL[Authenticated owner / project / participant ACL]
+  ACL --> CONV[(SQLite conversation + turns + messages + audit)]
+  CONV --> TICK[Deterministic bounded scheduler]
+  TICK --> TASK[(Existing durable task/lease queue)]
+  TASK --> A2A[A2A 1.0 subset]
+  TASK --> HTTP[HTTP JSON]
+  TASK --> LOCAL[Python function]
+  TASK --> CONV
+```
+
+Conversation turns use stable idempotency keys, avoid arbitrary LLM tool execution, and stop auto relay on failed worker tasks. Only a human principal can initiate a bounded autonomous discussion or close the conversation. Agent claims are derived from bearer credential `agent_id`, not user-supplied role. See [conversation specification](CONVERSATIONS-v0.4.zh-CN.md).
