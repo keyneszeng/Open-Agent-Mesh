@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0 — 2026-11-11
+
+- Real-time private per-conversation SSE feed (message/state/provisional delta), durable sequence cursor and Last-Event-ID replay, participant/owner/project ACL, finite subscriptions, keepalive.
+- HTTP SSE streaming agent adapter with incremental token forwarding, explicit final event and bounded frame/token budgets; independently configured remote endpoints/credentials.
+- A2A 1.0 JSON-RPC `SendStreamingMessage` and `SubscribeToTask` subset with status/artifact events; outgoing A2A SSE adapter, task-scoped delta journal with lease fencing.
+- Python SDK and Agent Skill CLI SSE readers; standalone demo streaming agent and three separate real-process verification suites (token-before-final, SIGKILL restart, concurrent load).
+- Limits: not full A2A/MCP conformance or proprietary product integrations; no token streaming from non-SSE agents, no provider-specific SDK/auth, no large attachments, no WebSockets or production multi-replica guarantees.
+
+
 ## 0.4.0 — 2026-11-11
 
 - Agent Conversation Engine: persisted participants, owner/project ACL, attributed messages, finite turn budgets, manual and rotating agent discussions, history window, audit and close.

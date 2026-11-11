@@ -32,7 +32,7 @@ def load_agents(path: str) -> dict[str, AgentSpec]:
         if not isinstance(agent_id, str) or not agent_id or not all(c.isalnum() or c in "-_" for c in agent_id):
             raise ValueError("agent id must contain only letters, numbers, hyphens, underscores")
         kind = item.get("kind")
-        if kind not in ("python", "http_json", "a2a_jsonrpc"):
+        if kind not in ("python", "http_json", "http_sse", "a2a_jsonrpc", "a2a_stream"):
             raise ValueError(f"unsupported agent kind: {kind}")
         handler = item.get("handler", "")
         url = item.get("url", "")

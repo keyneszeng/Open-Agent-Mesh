@@ -54,6 +54,10 @@ def main():
     chat_show.add_argument('conversation_id')
     chat_messages = commands.add_parser('chat-messages')
     chat_messages.add_argument('conversation_id')
+    chat_stream = commands.add_parser('chat-stream', help='Subscribe to real-time conversation SSE')
+    chat_stream.add_argument('conversation_id')
+    chat_stream.add_argument('--after', type=int, default=0)
+    chat_stream.add_argument('--wait-seconds', type=float, default=20.0)
     chat_send = commands.add_parser('chat-send')
     chat_send.add_argument('conversation_id')
     chat_send.add_argument('agent')
@@ -92,6 +96,23 @@ def main():
         result = request('/v1/conversations/' + segment(args.conversation_id))
     elif args.command == 'chat-messages':
         result = request('/v1/conversations/' + segment(args.conversation_id) + '/messages')
+    elif args.command == 'chat-stream':
+        token = os.environ.get('MESH_TOKEN')
+        if not token:
+            sys.exit('MESH_TOKEN is not set')
+        if not 0 <= args.after <= 2**63-1 or not .1 <= args.wait_seconds <= 30:
+            sys.exit('Invalid stream cursor or wait duration')
+        query = urllib.parse.urlencode({'after':args.after, 'wait_seconds':args.wait_seconds})
+        url = os.environ.get('MESH_URL','http://127.0.0.1:8765').rstrip('/') + '/v1/conversations/' + segment(args.conversation_id) + '/stream?' + query
+        req = urllib.request.Request(url,headers={'Authorization':'Bearer '+token,'Accept':'text/event-stream'})
+        try:
+            with urllib.request.urlopen(req, timeout=args.wait_seconds + 15) as response:
+                for raw in response:
+                    if raw.startswith(b'data:'):
+                        print(raw[5:].decode('utf-8').strip(), flush=True)
+        except urllib.error.HTTPError as exc:
+            sys.exit(f'Stream HTTP error: {exc.code}')
+        return
     elif args.command == 'chat-send':
         result = request('/v1/conversations/' + segment(args.conversation_id) + '/messages', 'POST',
                          {'to': args.agent, 'text': args.message})

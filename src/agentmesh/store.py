@@ -45,6 +45,11 @@ class Store:
                 updated_at TEXT NOT NULL,
                 UNIQUE(owner, request_key)
               );
+              CREATE TABLE IF NOT EXISTS task_deltas (
+                task_id TEXT NOT NULL, seq INTEGER NOT NULL, attempt INTEGER NOT NULL,
+                content TEXT NOT NULL, created_at TEXT NOT NULL,
+                PRIMARY KEY(task_id,seq)
+              );
               CREATE TABLE IF NOT EXISTS events (
                 seq INTEGER PRIMARY KEY AUTOINCREMENT,
                 task_id TEXT NOT NULL,
@@ -197,6 +202,28 @@ class Store:
                 self._event(db, task_id, "canceled", "Cancellation requested; underlying remote work may continue")
             row = db.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
             return dict(row)
+
+    def append_delta(self, task_id: str, lease_token: str, text: str) -> bool:
+        if not isinstance(text, str) or not text or len(text.encode("utf-8")) > 4096:
+            raise ValueError("Invalid live delta")
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            task = db.execute("""SELECT attempts FROM tasks WHERE id=? AND state='working'
+                AND lease_token=? AND lease_expires_at>?""", (task_id, lease_token, now())).fetchone()
+            if not task:
+                return False
+            usage = db.execute("""SELECT COUNT(*) n,COALESCE(SUM(LENGTH(CAST(content AS BLOB))),0) bytes
+                FROM task_deltas WHERE task_id=?""", (task_id,)).fetchone()
+            if usage["n"] >= 256 or usage["bytes"] + len(text.encode("utf-8")) > 65536:
+                raise ValueError("Live task quota exceeded")
+            seq = db.execute("SELECT COALESCE(MAX(seq),0)+1 FROM task_deltas WHERE task_id=?", (task_id,)).fetchone()[0]
+            db.execute("INSERT INTO task_deltas VALUES(?,?,?,?,?)", (task_id, seq, task["attempts"], text, now()))
+            return True
+
+    def deltas(self, task_id: str, after: int = 0, limit: int = 100) -> list[dict]:
+        with self.connect() as db:
+            return [dict(r) for r in db.execute("""SELECT seq,attempt,content,created_at FROM task_deltas
+                WHERE task_id=? AND seq>? ORDER BY seq LIMIT ?""", (task_id,after,limit)).fetchall()]
 
     def events(self, task_id: str) -> list[dict]:
         with self.connect() as db:

@@ -7,11 +7,12 @@ import inspect
 import json
 import os
 import uuid
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 import httpx
 
 from .config import AgentSpec
+from .remote_stream import run_a2a_stream
 
 
 class AgentExecutionError(Exception):
@@ -54,7 +55,8 @@ def _a2a_output(body: dict) -> tuple[bool, Any, str | None]:
 
 
 async def run_agent(spec: AgentSpec, *, task_id: str, value: Any,
-                    context: dict, parent_id: str | None) -> Any:
+                    context: dict, parent_id: str | None,
+                    on_delta: Callable[[str], Awaitable[None]] | None = None) -> Any:
     if spec.kind == "python":
         module, symbol = spec.handler.rsplit(":", 1)
         fn = getattr(importlib.import_module(module), symbol)
@@ -84,6 +86,78 @@ async def run_agent(spec: AgentSpec, *, task_id: str, value: Any,
             if not isinstance(response, dict) or "output" not in response:
                 raise AgentExecutionError("HTTP adapter must return JSON with an output field")
             return response["output"]
+        if spec.kind == "http_sse":
+            # Minimal documented adapter contract. No arbitrary remote URL or code execution.
+            headers["Idempotency-Key"] = task_id
+            headers["Accept"] = "text/event-stream"
+            async with client.stream("POST", spec.url, headers=headers, json={
+                "task_id":task_id, "input":value,"context":context,
+                "parent_task_id":parent_id,
+            }) as response:
+                response.raise_for_status()
+                if response.headers.get("content-type", "").split(";",1)[0].strip().lower() != "text/event-stream":
+                    raise AgentExecutionError("HTTP SSE adapter requires text/event-stream")
+                pieces: list[str] = []
+                total = 0
+                seen_done = False
+                event_type = "message"
+                data_lines: list[str] = []
+                async def process_event(event_name: str, lines: list[str]):
+                    nonlocal total, seen_done
+                    if not lines:
+                        return None
+                    if sum(len(x.encode("utf-8")) for x in lines) > 8192:
+                        raise AgentExecutionError("SSE frame exceeds 8 KB")
+                    try:
+                        payload = json.loads("\n".join(lines))
+                    except (json.JSONDecodeError, UnicodeError):
+                        raise AgentExecutionError("SSE data must be JSON") from None
+                    if not isinstance(payload, dict):
+                        raise AgentExecutionError("SSE event payload must be an object")
+                    if event_name == "delta":
+                        piece = payload.get("text", payload.get("delta"))
+                        if not isinstance(piece,str) or not piece or len(piece.encode("utf-8")) > 4096:
+                            raise AgentExecutionError("SSE delta requires 1..4096 UTF-8 bytes")
+                        total += len(piece.encode("utf-8"))
+                        if total > 65536 or len(pieces) >= 256:
+                            raise AgentExecutionError("SSE output quota exceeded")
+                        pieces.append(piece)
+                        if on_delta is not None:
+                            await on_delta(piece)
+                    elif event_name == "done":
+                        seen_done = True
+                        output = payload.get("output", "".join(pieces))
+                        if not isinstance(output, (str,dict,list,int,float,bool,type(None))):
+                            raise AgentExecutionError("Unsupported SSE final output")
+                        if len(json.dumps(output,ensure_ascii=False).encode("utf-8")) > 65536:
+                            raise AgentExecutionError("SSE final output quota exceeded")
+                        return output
+                    elif event_name == "error":
+                        raise AgentExecutionError("Remote SSE Agent reported failure")
+                    else:
+                        raise AgentExecutionError("Unknown SSE event type")
+                    return None
+                async for line in response.aiter_lines():
+                    if len(line.encode("utf-8")) > 8192:
+                        raise AgentExecutionError("SSE line exceeds 8 KB")
+                    if not line:
+                        outcome = await process_event(event_type, data_lines)
+                        event_type, data_lines = "message", []
+                        if seen_done:
+                            return outcome
+                    elif line.startswith("event:"):
+                        event_type = line[6:].strip()
+                    elif line.startswith("data:"):
+                        data_lines.append(line[5:].lstrip(" "))
+                    elif line.startswith(":") or line.startswith("id:") or line.startswith("retry:"):
+                        continue
+                if data_lines:
+                    result = await process_event(event_type, data_lines)
+                    if seen_done:
+                        return result
+                raise AgentExecutionError("SSE stream ended without done event")
+        if spec.kind == "a2a_stream":
+            return await run_a2a_stream(client, spec.url, headers, task_id, value, context, on_delta)
         if spec.kind == "a2a_jsonrpc":
             headers["A2A-Version"] = "1.0"
             message_id = task_id  # stable id on retries

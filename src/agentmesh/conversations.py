@@ -11,7 +11,10 @@ import re
 import uuid
 from typing import Any
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, Header, HTTPException, Request
+from fastapi.responses import StreamingResponse
+import asyncio
+import time
 from pydantic import BaseModel, Field
 
 from .store import Store, canonical, now
@@ -91,6 +94,14 @@ class ConversationEngine:
                     ON conversation_turns(state);
                 CREATE INDEX IF NOT EXISTS idx_conversations_owner
                     ON conversations(owner, updated_at);
+                CREATE TABLE IF NOT EXISTS conversation_stream (
+                    conversation_id TEXT NOT NULL, seq INTEGER NOT NULL,
+                    kind TEXT NOT NULL, payload_json TEXT NOT NULL,
+                    task_id TEXT, created_at TEXT NOT NULL,
+                    PRIMARY KEY(conversation_id, seq)
+                );
+                CREATE INDEX IF NOT EXISTS idx_conv_stream_task
+                    ON conversation_stream(conversation_id,task_id,kind);
                 CREATE TABLE IF NOT EXISTS conversation_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     conversation_id TEXT NOT NULL, kind TEXT NOT NULL,
@@ -98,9 +109,50 @@ class ConversationEngine:
                 );
             """)
 
+    def _feed(self, db, cid: str, kind: str, payload: dict, task_id: str | None = None):
+        # Per-conversation monotonically increasing offsets, safe under SQLite write lock.
+        seq = db.execute("SELECT COALESCE(MAX(seq),0)+1 FROM conversation_stream WHERE conversation_id=?", (cid,)).fetchone()[0]
+        db.execute("INSERT INTO conversation_stream VALUES (?,?,?,?,?,?)",
+                   (cid, seq, kind, canonical(payload), task_id, now()))
+        return seq
+
+    def stream_events(self, cid: str, after: int = 0, limit: int = 100) -> list[dict]:
+        with self.store.connect() as db:
+            rows = db.execute("""SELECT seq,kind,payload_json,task_id,created_at
+                FROM conversation_stream WHERE conversation_id=? AND seq>?
+                ORDER BY seq LIMIT ?""", (cid, after, limit)).fetchall()
+        return [{"seq": row["seq"], "kind": row["kind"],
+                 "data": json.loads(row["payload_json"]), "task_id": row["task_id"],
+                 "created_at": row["created_at"]} for row in rows]
+
+    def emit_delta(self, cid: str, task_id: str, lease_token: str, text: str) -> bool:
+        """Accept untrusted live text only for the currently fenced execution attempt."""
+        if not isinstance(text, str) or not text or len(text.encode("utf-8")) > 4096:
+            raise ValueError("Streaming delta exceeds 4096 bytes or is empty")
+        with self.store.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("""SELECT t.attempts FROM tasks t
+                JOIN conversation_turns x ON x.task_id=t.id
+                JOIN conversations c ON c.id=x.conversation_id
+                WHERE t.id=? AND t.lease_token=? AND t.state='working'
+                  AND t.lease_expires_at>? AND x.conversation_id=?
+                  AND x.state='submitted' AND c.state='open'""",
+                (task_id, lease_token, now(), cid)).fetchone()
+            if not row:
+                return False
+            usage = db.execute("""SELECT COUNT(*) n,COALESCE(SUM(LENGTH(payload_json)),0) bytes
+                FROM conversation_stream WHERE conversation_id=? AND task_id=? AND kind='delta'""",
+                (cid,task_id)).fetchone()
+            if usage["n"] >= 256 or usage["bytes"] + len(text.encode("utf-8")) > 80000:
+                raise ValueError("Live-stream per-task quota exceeded")
+            self._feed(db, cid, "delta", {"task_id":task_id,"attempt":row["attempts"],
+                                            "text":text,"provisional":True}, task_id=task_id)
+            return True
+
     def _event(self, db, conversation_id: str, kind: str, detail: str):
         db.execute("INSERT INTO conversation_events(conversation_id,kind,detail,created_at) VALUES(?,?,?,?)",
                    (conversation_id, kind, detail[:180], now()))
+        self._feed(db, conversation_id, "state", {"kind":kind,"detail":detail[:180]})
 
     def create(self, *, owner: str, title: str, participants: list[str], project_id: str | None,
                max_turns: int) -> dict:
@@ -154,6 +206,8 @@ class ConversationEngine:
         seq = db.execute("SELECT COALESCE(MAX(seq),0)+1 FROM conversation_messages WHERE conversation_id=?", (cid,)).fetchone()[0]
         db.execute("INSERT INTO conversation_messages VALUES(?,?,?,?,?,?,?,?,?,?)",
                    (cid, seq, sender, recipient, role, content, request_key, request_hash, task_id, now()))
+        self._feed(db, cid, "message", {"seq":seq,"sender":sender,"recipient":recipient,
+                                           "role":role,"content":content,"task_id":task_id}, task_id=task_id)
         return seq
 
     def post(self, cid: str, *, sender: str, to: str, text: str,
@@ -399,6 +453,45 @@ def install_conversation_api(app, engine: ConversationEngine, identity, registry
                                auto_rounds=body.rounds)
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from None
+
+    @app.get("/v1/conversations/{cid}/stream")
+    async def stream_conversation(cid: str, request: Request, after: int = 0, wait_seconds: float = 20.0,
+                                  last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+                                  profile: dict = Depends(identity)):
+        # Authorize before sending any stream bytes, never trust a client-supplied sender.
+        visible(cid, profile)
+        try:
+            cursor = int(last_event_id) if last_event_id is not None else after
+        except (TypeError, ValueError):
+            raise HTTPException(422, "Invalid event cursor") from None
+        if not 0 <= cursor <= 2**63 - 1 or not 0.1 <= wait_seconds <= 30:
+            raise HTTPException(422, "Invalid event cursor")
+
+        async def generate():
+            end = time.monotonic() + wait_seconds  # bounded connection; clients reconnect by cursor
+            last_ping = time.monotonic()
+            nonlocal cursor
+            while time.monotonic() < end:
+                if await request.is_disconnected():
+                    return
+                rows = engine.stream_events(cid, after=cursor, limit=100)
+                for row in rows:
+                    cursor = row["seq"]
+                    payload = json.dumps(row, ensure_ascii=False, separators=(",", ":"))
+                    yield f"id: {cursor}\nevent: {row['kind']}\ndata: {payload}\n\n"
+                if rows:
+                    continue
+                current = engine.get(cid)
+                if not current or current["state"] == "closed":
+                    return
+                if time.monotonic() - last_ping >= 3:
+                    yield ": keepalive\n\n"
+                    last_ping = time.monotonic()
+                await asyncio.sleep(0.10)
+
+        return StreamingResponse(generate(), media_type="text/event-stream",
+                                 headers={"Cache-Control":"no-cache, no-transform",
+                                          "X-Accel-Buffering":"no", "X-Content-Type-Options":"nosniff"})
 
     @app.post("/v1/conversations/{cid}/close")
     def close_conversation(cid: str, profile: dict = Depends(identity)):
