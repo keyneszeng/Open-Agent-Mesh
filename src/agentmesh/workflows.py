@@ -30,6 +30,7 @@ class WorkflowStep(BaseModel):
     depends_on: list[str] = Field(default_factory=list)
     fact_keys: list[str] = Field(default_factory=list)
     max_attempts: int = Field(default=1, ge=1, le=3)
+    approval_required: bool = False
 
 
 class WorkflowCreate(BaseModel):
@@ -134,6 +135,15 @@ class WorkflowEngine:
                 CREATE INDEX IF NOT EXISTS idx_workflow_state ON workflows(state, created_at);
                 CREATE INDEX IF NOT EXISTS idx_workflow_events ON workflow_events(workflow_id, seq);
             """)
+            columns = {r["name"] for r in db.execute("PRAGMA table_info(workflow_steps)")}
+            for column, definition in {
+                "approval_required": "INTEGER NOT NULL DEFAULT 0",
+                "approval_status": "TEXT",
+                "reviewed_by": "TEXT",
+                "reviewed_at": "TEXT",
+            }.items():
+                if column not in columns:
+                    db.execute(f"ALTER TABLE workflow_steps ADD COLUMN {column} {definition}")
 
     @staticmethod
     def _event(db: sqlite3.Connection, workflow_id: str, step_id: str | None,
@@ -173,10 +183,11 @@ class WorkflowEngine:
             for step in data.steps:
                 selected = {key: facts[key] for key in step.fact_keys}
                 db.execute("""INSERT INTO workflow_steps
-                   (workflow_id,step_id,agent_id,input_json,dependencies_json,facts_json,max_attempts,state)
-                   VALUES(?,?,?,?,?,?,?,'pending')""",
+                   (workflow_id,step_id,agent_id,input_json,dependencies_json,facts_json,max_attempts,approval_required,state)
+                   VALUES(?,?,?,?,?,?,?,?,'pending')""",
                    (workflow_id, step.id, step.to, canonical(step.input),
-                    canonical(step.depends_on), canonical(selected), step.max_attempts))
+                    canonical(step.depends_on), canonical(selected), step.max_attempts,
+                    int(step.approval_required)))
             self._event(db, workflow_id, None, "created", "Workflow accepted")
         return self.get(workflow_id)
 
@@ -206,6 +217,10 @@ class WorkflowEngine:
             "task_id": node["task_id"],
             "output": json.loads(task["output_json"]) if task and node["state"] == "completed" else None,
             "error": node["error"],
+            "approval_required": bool(node["approval_required"]),
+            "approval_status": node["approval_status"],
+            "reviewed_by": node["reviewed_by"],
+            "reviewed_at": node["reviewed_at"],
         }
 
     def list(self, owner: str | None) -> list[dict]:
@@ -243,6 +258,27 @@ class WorkflowEngine:
         # Release workflow's SQLite write lock before canceling underlying tasks.
         for task_id in to_cancel:
             self.tasks.cancel(task_id)
+        return self.get(workflow_id)
+
+    def review(self, workflow_id: str, step_id: str, *, actor: str, approve: bool) -> dict:
+        """Transactional human gate: cannot be replayed or approved after cancel."""
+        with self.tasks.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            workflow = db.execute("SELECT state FROM workflows WHERE id=?", (workflow_id,)).fetchone()
+            if not workflow or workflow["state"] != "running":
+                raise ValueError("Workflow is not running")
+            row = db.execute("SELECT state,approval_required FROM workflow_steps WHERE workflow_id=? AND step_id=?",
+                             (workflow_id, step_id)).fetchone()
+            if not row or not row["approval_required"] or row["state"] != "awaiting_approval":
+                raise ValueError("Step is not awaiting approval")
+            next_state = "pending" if approve else "failed"
+            db.execute("""UPDATE workflow_steps SET state=?,approval_status=?,reviewed_by=?,reviewed_at=?,error=?
+                         WHERE workflow_id=? AND step_id=? AND state='awaiting_approval'""",
+                       (next_state, "approved" if approve else "rejected", actor, now(),
+                        None if approve else "Human reviewer rejected step", workflow_id, step_id))
+            self._event(db, workflow_id, step_id, "approved" if approve else "rejected",
+                        f"Human review by {actor}")
+            db.execute("UPDATE workflows SET updated_at=? WHERE id=?", (now(), workflow_id))
         return self.get(workflow_id)
 
     def _set_step(self, workflow_id: str, step_id: str, *, state: str,
@@ -301,6 +337,10 @@ class WorkflowEngine:
                 continue
             if node["available_at"] and node["available_at"] > now():
                 continue
+            if node["approval_required"] and node["approval_status"] != "approved":
+                self._set_step(workflow_id, node["step_id"], state="awaiting_approval")
+                by_id[node["step_id"]]["state"] = "awaiting_approval"
+                continue
             try:
                 outputs = {dep: json.loads(self.tasks.get(by_id[dep]["task_id"])["output_json"]) for dep in deps}
                 value = _resolve(json.loads(node["input_json"]), outputs)
@@ -348,6 +388,10 @@ def install_workflow_api(app, engine: WorkflowEngine, identity, registry, can_us
                 raise HTTPException(404, "Agent not found")
             if not can_use(profile, step.to):
                 raise HTTPException(403, "Agent not allowed")
+        # Approval is a server-side agent policy, never a flag the caller may disable.
+        effective = [step.model_copy(update={"approval_required": True}) if registry[step.to].requires_approval
+                     else step for step in data.steps]
+        data = data.model_copy(update={"steps": effective})
         try:
             return engine.create(profile["name"], data)
         except LookupError:
@@ -373,3 +417,31 @@ def install_workflow_api(app, engine: WorkflowEngine, identity, registry, can_us
     async def cancel_workflow(workflow_id: str, profile: dict = Depends(identity)):
         owned(workflow_id, profile)
         return engine.cancel(workflow_id)
+
+    def review_access(workflow_id: str, profile: dict):
+        workflow = engine.get(workflow_id)
+        if workflow is None:
+            raise HTTPException(404, "Workflow not found")
+        if profile["name"] == workflow["owner"]:
+            raise HTTPException(403, "A different human principal must review the step")
+        if profile.get("role") != "admin" and not profile.get("can_approve", False):
+            raise HTTPException(403, "Human approval permission required")
+        if workflow["project_id"]:
+            check_project(workflow["project_id"], profile, write=True)
+        return workflow
+
+    @app.post("/v1/workflows/{workflow_id}/steps/{step_id}/approve")
+    async def approve_step(workflow_id: str, step_id: str, profile: dict = Depends(identity)):
+        review_access(workflow_id, profile)
+        try:
+            return engine.review(workflow_id, step_id, actor=profile["name"], approve=True)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None
+
+    @app.post("/v1/workflows/{workflow_id}/steps/{step_id}/reject")
+    async def reject_step(workflow_id: str, step_id: str, profile: dict = Depends(identity)):
+        review_access(workflow_id, profile)
+        try:
+            return engine.review(workflow_id, step_id, actor=profile["name"], approve=False)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None

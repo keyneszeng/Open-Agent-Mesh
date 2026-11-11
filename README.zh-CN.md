@@ -1,4 +1,4 @@
-# Open Agent Mesh — 通用 Agent 协作网关 v0.2
+# Open Agent Mesh — 通用 Agent 协作网关 v0.3
 
 本项目旨在提炼 Cursor Projects 类似的跨 Agent 协作思想，用开放标准实现一个**与具体大模型厂商无关的通用协作层**。
 
@@ -14,8 +14,11 @@
 | 项目知识库 | 不同 Agent 对齐业务规则，记录修改版本 | SQLite + 版本冲突检查 |
 | 任务队列 | 提交、完成、失败、取消、记录事件 | 已实现 |
 | 权限治理 | Token、Agent 调用范围、项目可访问范围 | 适用本地 MVP |
-| 持久化 DAG 协调器 | 多步骤依赖、结果传递、有限重试、取消、审计 | **v0.2 已实现**，仍是规则驱动，不是 LLM 自主规划 |
-| MCP、SSE、审批、分布式执行 | 完整 Agent 生态协作 | 后续研发 |
+| 持久化 DAG 协调器 | 多步骤依赖、结果传递、有限重试、取消、审计 | **v0.3 已实现**，仍是规则驱动，不是 LLM 自主规划 |
+| MCP 工具接口 | 2026-07-28 JSON-response 子集，五个工具 | **v0.3 部分实现** |
+| 人工审批 | 高风险 Agent 配置强制审批，双身份审核、审计 | **v0.3 已实现基础门禁** |
+| 持久化租约与恢复 | SQLite task 租约、心跳、过期恢复和旧 Worker 防写 | **v0.3 已实现基础能力** |
+| SSE、生产级分布式执行 | 多副本调度、全量协议、企业安全 | 仍待研发 |
 
 ## 二、五分钟本地运行
 
@@ -60,10 +63,10 @@ Swagger API 文档：`http://127.0.0.1:8765/docs`。
 
 ## 五、实际测试
 
-- 本地自动化测试：`PYTHONPATH=src pytest -q`（40 项通过）。
+- 本地自动化测试：`PYTHONPATH=src pytest -q`（新增 v0.3 测试及多轮自动化验证）。
 - 跨进程联调：`PYTHONPATH=src python tests/smoke_network.py`。此测试在不同端口启动两个网关和一个 HTTP Agent，验证 A2A JSON-RPC 转发、HTTP 转发、Node 客户端和 Skill CLI。
 
-## 六、v0.2 工作流演示
+## 六、v0.3 工作流演示
 
 ```bash
 python skills/open-agent-mesh/scripts/mesh.py workflow examples/workflow.json
@@ -74,6 +77,12 @@ python skills/open-agent-mesh/scripts/mesh.py workflow-get WORKFLOW_ID
 
 ## 七、仍需解决的工程问题
 
-当前不支持 A2A 1.0 的全部功能，例如流式 SSE、推送通知、文件类型、会话中断后继续、全面的多租户和完整协议信息校验。执行采用单机 SQLite 与内存调度；崩溃后重新入队的远端任务存在重复执行风险，取消并不撤销远端副作用。需要在生产之前完成持久化工作租约、幂等执行、访问审计、限流、OIDC/mTLS、Agent Card 校验、人工审批和第三方一致性测试。
+当前不支持 A2A 1.0 的全部功能，例如流式 SSE、推送通知、文件类型、会话中断后继续、全面的多租户和完整协议信息校验。执行采用单机 SQLite 与内存调度；租约到期后重新执行的远端任务仍可能有重复副作用，取消并不撤销远端副作用。需要在生产之前完成持久化工作租约、幂等执行、访问审计、限流、OIDC/mTLS、Agent Card 校验、人工审批和第三方一致性测试。
 
 完整英文使用说明和配置示例请见 `README.md`，架构与安全清单请见 `docs/ARCHITECTURE.md`，后续研发路线请见 `docs/ROADMAP.md`。
+
+## 八、v0.3 可靠性、MCP 与人工审批
+
+本版新增 **SQLite 任务租约/心跳/过期回收**、强制 **Agent 人工审批门禁**、**MCP 2026-07-28 JSON-response 工具接口子集**，以及真实进程 SIGKILL、重启、负载和随机化测试。示例配置中 `gated-demo` 为需审批的演示 Agent，直接提交会被拒绝，只能经工作流审核后运行。
+
+**请按 [v0.3 可靠性与安全说明](docs/RELIABILITY-v0.3.zh-CN.md) 与 [多轮测试计划](docs/TEST_PLAN-v0.3.zh-CN.md) 操作。** 不支持生产级多副本 DAG、OIDC、完整 MCP/A2A、端到端 exactly-once。

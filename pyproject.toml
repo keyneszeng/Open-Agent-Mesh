@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "open-agent-mesh"
-version = "0.2.0"
+version = "0.3.0"
 description = "Framework-neutral multi-agent task mesh with a partial A2A 1.0 JSON-RPC bridge"
 requires-python = ">=3.10"
 dependencies = ["fastapi>=0.110,<1", "uvicorn>=0.25,<1", "httpx>=0.26,<1", "pydantic>=2,<3"]

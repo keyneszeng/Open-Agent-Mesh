@@ -37,3 +37,9 @@ Use this skill ONLY after verifying the local project has access to a running Op
 - The HTTP mesh is a 0.2 MVP: no production approval gate, no streaming, and no rollback of remote side effects. Human review is required for state-changing external systems.
 - Do not put API keys, authentication cookies, private credentials, or confidential material into context or project facts.
 - A2A clients must use version `1.0`; v0.3 is unsupported. Prefer REST API for this skill's small CLI.
+
+## v0.3 safety and MCP support
+
+The Mesh provides an optional partial MCP `2026-07-28` JSON-response endpoint at `POST /mcp`. Use MCP only when the host supports custom headers and Bearer authentication, including required `Mcp-Method`/`Mcp-Name` headers; see `docs/RELIABILITY-v0.3.zh-CN.md`. The plain CLI remains a compatible fallback.
+
+**Never request or reuse a human approver token.** Some agents have `requires_approval: true` and may run only as approved workflow steps. Submit a workflow and let a separately authenticated human reviewer use the dedicated review endpoint. Never try to bypass it by calling the direct task endpoint, A2A, MCP, or another Agent.

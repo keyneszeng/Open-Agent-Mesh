@@ -18,6 +18,7 @@ class AgentSpec:
     url: str = ""
     token_env: str = ""
     timeout_seconds: int = 25
+    requires_approval: bool = False
 
 
 def load_agents(path: str) -> dict[str, AgentSpec]:
@@ -49,7 +50,10 @@ def load_agents(path: str) -> dict[str, AgentSpec]:
             description=item.get("description", ""), skills=tuple(item.get("skills", [])),
             handler=handler, url=url, token_env=item.get("token_env", ""),
             timeout_seconds=int(item.get("timeout_seconds", 25)),
+            requires_approval=item.get("requires_approval", False),
         )
+        if not isinstance(specs[agent_id].requires_approval, bool):
+            raise ValueError("requires_approval must be boolean")
         if not 1 <= specs[agent_id].timeout_seconds <= 300:
             raise ValueError("timeout_seconds must be 1..300")
     return specs
@@ -71,6 +75,8 @@ def load_tokens() -> dict:
         seen_names.add(profile["name"])
         if not isinstance(profile.get("allowed_agents", []), list):
             raise ValueError("allowed_agents must be a list")
+        if not isinstance(profile.get("can_approve", False), bool):
+            raise ValueError("can_approve must be boolean")
         if not isinstance(profile.get("allowed_projects", []), list):
             raise ValueError("allowed_projects must be a list")
         roles = profile.get("project_roles", {})

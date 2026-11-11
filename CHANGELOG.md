@@ -1,31 +1,23 @@
 # Changelog
 
-All important implementation and research updates are recorded here.
+## 0.3.0 — 2026-11-11
 
-## [Unreleased]
-
-## [0.2.0] — 2026-11-11
-
-- Added persisted, explicit DAG workflows (up to 24 steps) with dependency-aware dispatch, output references, bounded retries, step cancellation and owner-scoped audit.
-- Added revision-pinned opt-in project fact context and `reader` / `editor` project roles, preserving legacy allowed_projects.
-- Added workflow endpoints, Python client and portable Agent Skill workflow commands; 16 new tests (40 total).
-- Preserved existing cross-process smoke tests in CI. Single-process SQLite scope remains; no full A2A conformance or autonomous LLM planning.
+- SQLite task lease and heartbeat, fencing token, lease expiry recovery, legacy database schema migration and explicit warning about at-least-once external side effects.
+- Mandatory approval gates for configured agents: approve/reject endpoints with separate principal, project-scoped reviewer ACL and audit events.
+- Partial MCP 2026-07-28 stateless JSON Streamable HTTP endpoint with five scoped tools; not a complete implementation.
+- Error handling, health-check scheduler status, fixed DB connection cleanup, tests, chaos injection and concurrent load suite.
+- New CI Python version matrix (3.10/3.12/3.13) with six verification stages.
+- **Not yet production ready:** external OIDC, distributed DAG ownership, PostgreSQL, quotas, SSE, independent conformance certification.
 
 
-- Added permanent project charter, governance instructions, contribution/PR template and commercial research hypotheses.
-- Added dated research notes connecting Cursor-inspired Agent collaboration with the open A2A/MCP/Skills architecture.
-- Created priority research Issues #1–#6 for interoperability, security, coordination, adapters, knowledge and business validation.
-- Extended GitHub Actions verification to include cross-process networking smoke tests.
-- Repository is the canonical development baseline. Future changes should be committed with tests and documentation.
+## 0.2.0 — 2026-11-11
 
-## [0.1.0] — 2026-11-11
+- Durable explicit DAG work orchestration: dependencies, partial parallelism, nested result references, bounded retries and cancellation.
+- Workflow HTTP API, Python client and portable Agent Skill commands.
+- Pinned project fact snapshots and `reader`/`editor` project roles (legacy `allowed_projects` retained).
+- 16 new workflow tests and existing 24 regression tests (40 total), plus cross-process smoke test.
+- Scope: single process SQLite, no automatic LLM planning, no distributed lease, not full A2A conformance.
 
-- **Source published to GitHub**: 26 original source, test, config and documentation files imported to main in commit `1674bdd28b085be52deb8484133229854609eb8f`.
-- Basic A2A 1.0 JSON-RPC subset and HTTP agent adapters.
-- Task storage, events, scoped bearer authorization, idempotency and hop limits.
-- Versioned project knowledge, example coordinator and portable Agent Skill.
-- Python and Node examples, network smoke test.
-- Passed 24 local core tests and cross-process integration smoke tests.
-- Verified GitHub Actions original 24-test workflow succeeded.
+## 0.1.0 — 2026-11-11
 
-**Limitations:** v0.1 is an MVP and has not passed independent full A2A conformance or a production security audit.
+- Initial A2A 1.0 JSON-RPC subset, HTTP and Python adapters, durable tasks, scoped facts, token ACL, examples and test suite.

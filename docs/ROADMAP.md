@@ -2,8 +2,8 @@
 
 - **v0.1 (this bundle):** portable API; basic A2A 1.0 JSON-RPC; generic HTTP/Python agent adapters; persist tasks; ACL, audit, idempotency, hop limits; project knowledge with revision history; portable Agent Skill; tests.
 - **v0.2 (implemented initial slice):** persisted explicit DAG workflows, dependency-output passing, retries, snapshot of selected shared facts, reader/editor ACL, CLI/SDK endpoints and tests. Still pending: full A2A SDK adapter with conformance tests; streaming SSE, files, multi-turn continuation, push callbacks and cancellation propagation; structured capability schema.
-- **v0.3:** mTLS/OIDC, signed Agent Cards, human approvals, per-agent secrets, explicit trust policies, PostgreSQL + Redis leases, retries, quotas, multi-tenant isolation.
-- **v0.4:** first-party framework-specific wrappers for OpenAI Agents SDK, LangGraph, CrewAI and other frameworks; MCP tools exposing mesh calls; CLI scaffolding.
+- **v0.3 (implemented initial slice):** SQLite task leasing and restart recovery (not distributed DAG), mandatory human approval gates, partial MCP 2026-07-28 tool bridge, systematic failure injection / concurrent tests. **Pending:** OIDC/mTLS, signed Agent Cards, PostgreSQL + Redis, cross-tenant isolation, quotas, external conformance.
+- **v0.4:** first-party framework-specific wrappers for OpenAI Agents SDK, LangGraph, CrewAI and other frameworks; fuller MCP implementation, CLI scaffolding and SDK interoperability tests.
 - **v0.5:** coordinator policies, knowledge-base with versioned decisions and evidence, conflict coordination, budget limits, distributed tracing, automated quality gates.
 
 **Architecture rule:** the protocol layer transports messages; the coordination layer decides *which* agent, *when*, *with what evidence*, and *under whose authorization*. Neither the wire protocol nor a model's claims substitute for authorization.
