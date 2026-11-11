@@ -8,3 +8,24 @@
 - **v0.6 (planned):** provider-native adapters (where authorized API exists), official A2A/MCP SDK conformance matrix, adaptive budget/rate controls, backpressure and stream retention, distributed tracing, stronger approval policy and task continuation semantics.
 
 **Architecture rule:** the protocol layer transports messages; the coordination layer decides *which* agent, *when*, *with what evidence*, and *under whose authorization*. Neither the wire protocol nor a model's claims substitute for authorization.
+
+## Product architecture commitment: Context-first dual mode (ADR-0002; accepted 2026-11-11)
+
+The product has **two equally first-class operating modes** sharing the same authoritative `goal/context_scope`, policy engine, identity/delegation chain, workflow scheduler, events and artifact journal:
+
+- **Direct Flow (no workspace/group):** one goal, an authorized principal and a bounded inter-agent workflow; no persistent collaboration room required. It still retains durable context, audit and task history.
+- **Workspace Flow (with workspace/group):** an ongoing group of human members and multiple heterogeneous agents, working on one or more goals through conversations and workflows; the workspace is an optional coordination container, **not** a second context store.
+
+**Human agency:** all nontrivial Agent side effects must be attributable to an authenticated human or organization, an explicit bounded delegation and a scoped Agent identity. An Agent is acting *on behalf of* a principal; this does not imply one-to-one human/agent ownership. Human approval remains mandatory for high-risk operations.
+
+**Context semantics:** one logical, versioned source of truth, **not unrestricted replication of private memory or secrets**. Agents receive only authorized context views pinned to a revision. Conversations are evidence/proposals; they cannot silently rewrite authoritative goals or policies.
+
+**Implementation work, not yet completed:**
+1. ContextEngine entities: goal, context_scope, revisions, decision provenance and scoped views; scope isolation and CAS updates.
+2. Direct Flow: workflow/run API bound to goal without workspace; recoverability and auditing.
+3. Workspace: membership, role assignment, multiple workflows, group conversations, shared goal/context and controlled history visibility.
+4. Attach Direct Flow to Workspace without losing goal/context IDs, artifacts, events or authorization provenance.
+5. Human ↔ Agent delegation registry, revocation, least-privilege grants, budget/approval gates.
+6. Unit, property, concurrency, failure injection, data-leak, cross-process and official adapter interoperability tests.
+
+Milestone proposal: prioritize context foundations and Direct Flow first, then workspace lifecycle and migrations, then external provider adapters and enterprise tenancy. The v0.1–v0.5 claimed features and existing v0.6 provider aspirations remain historically true, but **no dual-mode workspace behavior is yet implemented or tested**. Detailed contract: [ADR-0002](adr/0002-context-first-dual-mode-and-human-delegation.md).
