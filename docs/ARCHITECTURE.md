@@ -1,4 +1,4 @@
-# Architecture and threat model (v0.1)
+# Architecture and threat model (v0.3)
 
 ```mermaid
 flowchart LR
@@ -13,7 +13,7 @@ flowchart LR
 
 - *Discovery*: `GET /v1/agents` (authorized) and per-agent public Agent Cards.
 - *Delegation*: HTTP task with destination, context, parent ID; fixed-depth recursion bound.
-- *Durability*: sqlite stores submitted, working, completed, failed and canceled tasks. On restart, interrupted `working` becomes `submitted` (possible replay!).
+- *Durability*: sqlite stores submitted, working, completed, failed and canceled tasks. Expired `working` leases are atomically re-queued by the next claim; an active lease is not stolen just because another instance initialized. External replay remains possible.
 - *Authorization*: one opaque bearer credential per principal; `allowed_agents` controls dispatch; owner scopes task retrieval.
 - *Secret handling*: remote auth token only read from environment; never store remote token in task body. Context is passed through verbatim; caller must exclude secrets.
 - *Shared knowledge*: Project-scoped facts with optimistic concurrency and complete revisions; all explicitly authorized project members can read them.
@@ -26,7 +26,7 @@ flowchart LR
 2. No uncontrolled agent tool execution from natural-language prompts: only configured destinations are callable.
 3. No default authorization token: missing `MESH_TOKENS` aborts startup.
 4. No implicit access to one another's private memory, prompts, credentials or files.
-5. One process; four in-flight jobs; durable local DB. Not distributed-safe; external side effects may run twice after a crash.
+5. Single-process DAG scheduler, four in-flight tasks per process. SQLite task claims have leases but multi-process DAG coordination remains unsupported; external side effects may run twice after a crash.
 
 ## Missing before Internet/public production
 
@@ -36,3 +36,8 @@ Externalized identity (OIDC / mTLS); multi-tenant isolation; quotas and rate lim
 ## v0.2 persisted coordinator
 
 `WorkflowEngine` records explicit DAGs in `workflows`, `workflow_steps`, and `workflow_events` alongside the existing task journal. One background loop polls DAGs and submits ready steps via the same authenticated task storage path, with deterministic workflow step attempt idempotency keys. Deployed as a single process; **do not enable multiple server worker processes**. A crash between an external agent effect and task status persistence can still cause replay. Only project facts explicitly named by `fact_keys` are copied (revision-pinned) into a step context. Legacy `allowed_projects` grants editor access; fine-grained `project_roles` supports reader/editor. Store content is not encrypted at rest.
+
+
+## v0.3 upgrade slice
+
+SQLite claims now use expiry + fencing tokens and heartbeat; sqlite connections are closed rather than merely committed. Human-gated agents are configured server-side and do not accept direct tasks. A partial MCP 2026-07-28 JSON-response bridge shares the existing bearer token ACL. Reviewers must be a different principal from the workflow owner and have explicit review authority. A review token must NOT be accessible from Agent code. See [v0.3 reliability details](RELIABILITY-v0.3.zh-CN.md) and [test plan](TEST_PLAN-v0.3.zh-CN.md).

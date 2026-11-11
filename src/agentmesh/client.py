@@ -43,6 +43,16 @@ class MeshClient:
         return self._call("/v1/workflows", "POST", {"steps": steps,
             "project_id": project_id, "idempotency_key": idempotency_key})
 
+    def approve_workflow_step(self, workflow_id, step_id):
+        """Use only with a separate human review principal, never an agent token."""
+        return self._call("/v1/workflows/" + urllib.parse.quote(workflow_id, safe="") +
+                          "/steps/" + urllib.parse.quote(step_id, safe="") + "/approve", "POST")
+
+    def reject_workflow_step(self, workflow_id, step_id):
+        """Use only with a separate human review principal, never an agent token."""
+        return self._call("/v1/workflows/" + urllib.parse.quote(workflow_id, safe="") +
+                          "/steps/" + urllib.parse.quote(step_id, safe="") + "/reject", "POST")
+
     def workflow(self, workflow_id):
         return self._call("/v1/workflows/" + urllib.parse.quote(workflow_id, safe=""))
 

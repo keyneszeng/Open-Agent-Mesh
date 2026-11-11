@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import hashlib
+from contextlib import contextmanager
 import json
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -72,16 +73,25 @@ class Store:
                 PRIMARY KEY(project_id, key, revision)
               );
             """)
-            # Tasks interrupted by a crash return to the queue. Remote side-effects
-            # may have occurred; adapters must use idempotency to avoid duplication.
-            db.execute("UPDATE tasks SET state='submitted', updated_at=? WHERE state='working'", (now(),))
+            # Add durable leases for upgrades from v0.1/v0.2. NEVER immediately
+            # steal active work on a second gateway's startup.
+            columns = {r["name"] for r in db.execute("PRAGMA table_info(tasks)")}
+            if "lease_token" not in columns:
+                db.execute("ALTER TABLE tasks ADD COLUMN lease_token TEXT")
+            if "lease_expires_at" not in columns:
+                db.execute("ALTER TABLE tasks ADD COLUMN lease_expires_at TEXT")
 
+    @contextmanager
     def connect(self):
         db = sqlite3.connect(self.path, timeout=5)
-        db.row_factory = sqlite3.Row
-        db.execute("PRAGMA journal_mode=WAL")
-        db.execute("PRAGMA busy_timeout=5000")
-        return db
+        try:
+            db.row_factory = sqlite3.Row
+            db.execute("PRAGMA journal_mode=WAL")
+            db.execute("PRAGMA busy_timeout=5000")
+            with db:
+                yield db
+        finally:
+            db.close()
 
     def get(self, task_id: str) -> dict | None:
         with self.connect() as db:
@@ -124,25 +134,53 @@ class Store:
         db.execute("INSERT INTO events(task_id,state,detail,created_at) VALUES(?,?,?,?)",
                    (task_id, state, detail[:300], now()))
 
-    def claim(self) -> dict | None:
+    def claim(self, *, lease_seconds: int = 30) -> dict | None:
+        """Atomically recover expired leases then claim one queued task.
+
+        A new lease token is fencing metadata: late workers cannot finalize work
+        after their lease has expired or another worker has reclaimed it.
+        External side effects remain at-least-once: adapters MUST be idempotent.
+        """
+        if not 2 <= lease_seconds <= 3600:
+            raise ValueError("lease_seconds must be 2..3600")
+        timestamp = now()
+        expires = (datetime.now(timezone.utc) + timedelta(seconds=lease_seconds)).isoformat().replace("+00:00", "Z")
+        token = uuid.uuid4().hex
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            row = db.execute("SELECT * FROM tasks WHERE state='submitted' ORDER BY created_at LIMIT 1").fetchone()
+            expired = db.execute("SELECT id FROM tasks WHERE state='working' AND (lease_expires_at IS NULL OR lease_expires_at<=?)", (timestamp,)).fetchall()
+            for old in expired:
+                db.execute("UPDATE tasks SET state='submitted',lease_token=NULL,lease_expires_at=NULL,updated_at=? WHERE id=? AND state='working'", (timestamp, old["id"]))
+                self._event(db, old["id"], "submitted", "Expired lease recovered; execution may have occurred remotely")
+            row = db.execute("SELECT * FROM tasks WHERE state='submitted' ORDER BY created_at,id LIMIT 1").fetchone()
             if not row:
                 return None
-            db.execute("UPDATE tasks SET state='working', attempts=attempts+1, updated_at=? WHERE id=? AND state='submitted'", (now(), row["id"]))
-            self._event(db, row["id"], "working", "Worker claimed task")
+            db.execute("UPDATE tasks SET state='working', attempts=attempts+1, lease_token=?,lease_expires_at=?,updated_at=? WHERE id=? AND state='submitted'",
+                       (token, expires, timestamp, row["id"]))
+            self._event(db, row["id"], "working", "Worker claimed task lease")
             return dict(db.execute("SELECT * FROM tasks WHERE id=?", (row["id"],)).fetchone())
 
-    def finish(self, task_id: str, state: str, output: Any = None, error: str | None = None) -> bool:
+    def renew(self, task_id: str, lease_token: str, *, lease_seconds: int = 30) -> bool:
+        if not 2 <= lease_seconds <= 3600:
+            raise ValueError("lease_seconds must be 2..3600")
+        timestamp = now()
+        expires = (datetime.now(timezone.utc) + timedelta(seconds=lease_seconds)).isoformat().replace("+00:00", "Z")
+        with self.connect() as db:
+            cur = db.execute("""UPDATE tasks SET lease_expires_at=?
+                WHERE id=? AND state='working' AND lease_token=? AND lease_expires_at>?""",
+                (expires, task_id, lease_token, timestamp))
+            return bool(cur.rowcount)
+
+    def finish(self, task_id: str, state: str, output: Any = None, error: str | None = None,
+               *, lease_token: str) -> bool:
         if state not in ("completed", "failed"):
             raise ValueError("invalid finish state")
         with self.connect() as db:
             cur = db.execute("""
-                UPDATE tasks SET state=?, output_json=?, error=?, updated_at=?
-                WHERE id=? AND state='working'
+                UPDATE tasks SET state=?, output_json=?, error=?, updated_at=?,lease_token=NULL,lease_expires_at=NULL
+                WHERE id=? AND state='working' AND lease_token=? AND lease_expires_at>?
             """, (state, canonical(output) if state == "completed" else None,
-                   error[:400] if error else None, now(), task_id))
+                   error[:400] if error else None, now(), task_id, lease_token, now()))
             if cur.rowcount:
                 self._event(db, task_id, state, "Task finished" if state == "completed" else "Task execution failed")
             return bool(cur.rowcount)

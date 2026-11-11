@@ -64,28 +64,43 @@ def create_app(*, config_path: str | None = None, db_path: str | None = None,
     store = Store(db_path or os.environ.get("MESH_DB_PATH", "/tmp/agentmesh.sqlite3"))
     base = (public_url or os.environ.get("MESH_PUBLIC_URL", "http://127.0.0.1:8765")).rstrip("/")
     in_flight: set[asyncio.Task] = set()
+    lease_seconds = int(os.environ.get("MESH_LEASE_SECONDS", "30"))
+    if not 2 <= lease_seconds <= 3600:
+        raise ValueError("MESH_LEASE_SECONDS must be 2..3600")
     workflows = WorkflowEngine(store)
 
     async def execute(row):
+        task_id, lease_token = row["id"], row["lease_token"]
+
+        async def heartbeat():
+            while True:
+                await asyncio.sleep(lease_seconds / 3)
+                if not store.renew(task_id, lease_token, lease_seconds=lease_seconds):
+                    return
+
+        keeper = asyncio.create_task(heartbeat())
         try:
-            output = await run_agent(registry[row["agent_id"]], task_id=row["id"],
+            output = await run_agent(registry[row["agent_id"]], task_id=task_id,
                                      value=json.loads(row["input_json"]),
                                      context=json.loads(row["context_json"]),
                                      parent_id=row["parent_id"])
-            store.finish(row["id"], "completed", output=output)
+            store.finish(task_id, "completed", output=output, lease_token=lease_token)
         except asyncio.CancelledError:
-            store.finish(row["id"], "failed", error="Worker interrupted; retry after service restart")
+            # Keep lease until it expires; another process can safely reclaim it.
+            # A canceled API task remains canceled, not requeued.
             raise
         except Exception as exc:
-            # Avoid leaking exception internals, URLs or remote credentials to callers.
-            store.finish(row["id"], "failed", error=f"{type(exc).__name__}: execution failed")
+            store.finish(task_id, "failed", error=f"{type(exc).__name__}: execution failed", lease_token=lease_token)
+        finally:
+            keeper.cancel()
+            await asyncio.gather(keeper, return_exceptions=True)
 
     async def worker():
         while True:
             workflows.tick()
             # Single-process async worker with bounded in-flight concurrency.
             while len(in_flight) < 4:
-                row = store.claim()
+                row = store.claim(lease_seconds=lease_seconds)
                 if row is None:
                     break
                 task = asyncio.create_task(execute(row))
@@ -96,6 +111,7 @@ def create_app(*, config_path: str | None = None, db_path: str | None = None,
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         runner = asyncio.create_task(worker())
+        app.state.worker_task = runner
         try:
             yield
         finally:
@@ -109,7 +125,7 @@ def create_app(*, config_path: str | None = None, db_path: str | None = None,
             if in_flight:
                 await asyncio.gather(*in_flight, return_exceptions=True)
 
-    app = FastAPI(title="Open Agent Mesh", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(title="Open Agent Mesh", version="0.3.0", lifespan=lifespan)
     app.state.store = store
     app.state.workflows = workflows
 
@@ -139,6 +155,8 @@ def create_app(*, config_path: str | None = None, db_path: str | None = None,
             raise HTTPException(404, "Agent not found")
         if not can_use(profile, data.to):
             raise HTTPException(403, "Agent not allowed")
+        if registry[data.to].requires_approval:
+            raise HTTPException(403, "Agent requires an approved workflow step")
         encoded = json.dumps({"input": data.input, "context": data.context}, ensure_ascii=False)
         if len(encoded.encode()) > 128_000:
             raise HTTPException(413, "Task payload exceeds 128 KB")
@@ -160,7 +178,7 @@ def create_app(*, config_path: str | None = None, db_path: str | None = None,
                 "name": agent.name, "description": agent.description,
                 "supportedInterfaces": [{"url": f"{base}/a2a/{agent_id}",
                                          "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}],
-                "version": "0.2.0", "capabilities": {"streaming": False, "pushNotifications": False},
+                "version": "0.3.0", "capabilities": {"streaming": False, "pushNotifications": False},
                 "securitySchemes": {"bearer": {"httpAuthSecurityScheme": {"scheme": "Bearer"}}},
                 "security": [{"bearer": []}],
                 "defaultInputModes": ["text/plain", "application/json"],
@@ -172,7 +190,7 @@ def create_app(*, config_path: str | None = None, db_path: str | None = None,
         return {
             "name": "Open Agent Mesh Router", "description": "Route to a configured agent using params.metadata.meshTarget",
             "supportedInterfaces": [{"url": f"{base}/a2a", "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}],
-            "version": "0.2.0", "capabilities": {"streaming": False, "pushNotifications": False},
+            "version": "0.3.0", "capabilities": {"streaming": False, "pushNotifications": False},
             "securitySchemes": {"bearer": {"httpAuthSecurityScheme": {"scheme": "Bearer"}}},
             "security": [{"bearer": []}],
             "defaultInputModes": ["text/plain", "application/json"],
@@ -182,6 +200,9 @@ def create_app(*, config_path: str | None = None, db_path: str | None = None,
 
     @app.get("/health")
     async def health():
+        runner = getattr(app.state, "worker_task", None)
+        if runner is not None and runner.done():
+            return JSONResponse({"ok": False, "detail": "Scheduler unavailable"}, status_code=503)
         return {"ok": True, "agents": len(registry)}
 
     @app.get("/.well-known/agent-card.json")
@@ -197,6 +218,7 @@ def create_app(*, config_path: str | None = None, db_path: str | None = None,
     @app.get("/v1/agents")
     async def agents(profile: dict = Depends(identity)):
         return [{"id": x.id, "name": x.name, "description": x.description, "skills": list(x.skills),
+                 "requires_approval": x.requires_approval,
                  "a2a_card": f"{base}/agents/{x.id}/.well-known/agent-card.json"}
                 for x in registry.values() if can_use(profile, x.id)]
 
@@ -359,4 +381,8 @@ def create_app(*, config_path: str | None = None, db_path: str | None = None,
         return await rpc(agent_id, request, profile)
 
     install_workflow_api(app, workflows, identity, registry, can_use, check_project)
+    from .mcp import install_mcp_api
+    install_mcp_api(app, identity=identity, registry=registry, can_use=can_use,
+                    submit=submit, owned=owned, workflows=workflows,
+                    check_project=check_project)
     return app
