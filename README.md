@@ -1,39 +1,38 @@
 # Open Agent Mesh
 
-[中文说明](README.zh-CN.md) · [Architecture](docs/ARCHITECTURE.md) · [Roadmap](docs/ROADMAP.md)
+[中文说明](README.zh-CN.md) · [技术指南](docs/TECHNICAL_GUIDE.md) · [Architecture](docs/ARCHITECTURE.md) · [Roadmap](docs/ROADMAP.md) · [Project Charter](docs/PROJECT_CHARTER.zh-CN.md)
 
 **Framework-neutral Agent-to-Agent collaboration infrastructure.**
 
 Open Agent Mesh aims to let authorized AI agents coordinate across frameworks, machines and users through open protocols rather than requiring a proprietary product. It builds around **A2A**, familiar **HTTP JSON**, **Agent Skills**, persistent tasks, permissions and project-shared knowledge. MCP integration and higher-level coordination are planned.
 
-> **Status: v0.1 MVP / research prototype.** It implements a subset of A2A 1.0 JSON-RPC, not a conformance-certified full A2A server, and is not associated with Cursor. Integration with ChatGPT, Codex, Cursor or Claude requires each host application's supported tool, skill or API permissions.
+> **Status: v0.1.0 MVP / research prototype.** Implements a subset of A2A 1.0 JSON-RPC, not a certified full A2A server, and is independent of Cursor. ChatGPT, Codex, Cursor and Claude integration depends on each host application's supported tools, skills or APIs.
 
-## Principles
+## Core capabilities
 
-1. **Protocol-agnostic core**: A2A for peer-to-peer tasks; MCP for connecting tools; generic HTTP for interoperability.
-2. **Agent autonomy with explicit authorization**: capability discovery, granular scopes, approval gates for consequential actions.
-3. **Shared project context**: versioned facts, decisions, evidence and conflict protection.
-4. **Auditable orchestration**: persistent task status, idempotency, event journal, safe delegation and traceability.
-5. **Open core and portable deployments**: local-first development, cloud-ready infrastructure and neutral SDKs.
-6. **Security first**: distrust peer messages; isolate identities, credentials and tenant contexts.
+- Agent registry with explicit, configured capabilities
+- Basic A2A 1.0 JSON-RPC bridge and HTTP JSON adapters
+- Durable local task records, status, events and idempotency
+- Scoped bearer access policy, permitted agents and projects, delegation depth limit
+- Shared versioned project knowledge with conflict detection
+- Portable Agent Skill, Python and Node.js demos, lightweight coordinator example
+- Dockerfile, local unit tests and cross-process networking smoke test
 
-## v0.1 architecture
+**Not yet production grade:** distributed scheduling, true remote-side effect cancellation, full A2A streaming/push methods, robust authentication, multi-tenant isolation, signed Agent Cards, secure artifact store, a native MCP server and autonomous planner.
+
+## Architecture
 
 ```mermaid
 flowchart LR
-    A[Codex / Cursor / Claude / any Agent] -->|A2A / HTTP / Skill| B[Agent Mesh Gateway]
-    B --> C[Authentication & Authorization]
-    C --> D[Task and Event Store]
-    D --> E[Runner]
-    E --> F[Local Python Agents]
-    E --> G[Remote HTTP Agents]
-    E --> H[Remote A2A Agents]
-    B --> K[(Versioned Project Knowledge)]
+  A[Authorized AI agents] -->|A2A / HTTP / Agent Skill| B[Mesh Gateway]
+  B --> C[AuthZ + Policy]
+  C --> D[(Task/Event Store)]
+  D --> E[Task Runner]
+  E --> F[Python / HTTP / A2A Agents]
+  B --> K[(Versioned Project Knowledge)]
 ```
 
-The local MVP includes task registration and dispatch, agent metadata, A2A JSON-RPC subset, SQLite persistence, per-principal token and project scopes, shared knowledge revisions, demo agents, Python/Node clients and a portable SKILL.md. **It does not yet provide production-grade distributed scheduling, full A2A, SSE, MCP integration, OIDC/mTLS, multi-tenant security or robust remote cancellation.**
-
-## Quick start (after source is populated)
+## Run locally
 
 Requires Python 3.10+.
 
@@ -46,29 +45,37 @@ export MESH_TOKEN=development-token
 agentmesh
 ```
 
-Local API documentation: http://127.0.0.1:8765/docs
+Swagger docs: http://127.0.0.1:8765/docs
 
-**Development tokens are only for local testing. Never expose them on a public network.**
+Use demo credentials **only** on an isolated development machine, never on public networks. See [Technical Guide](docs/TECHNICAL_GUIDE.md) and [Chinese setup guide](README.zh-CN.md).
+
+## Verify
 
 ```bash
-PYTHONPATH=src pytest -q
+PYTHONPATH=src python -m pytest -q
 PYTHONPATH=src python tests/smoke_network.py
 ```
 
-## Long-term research
+The local MVP passed 24 core tests and cross-process Python/Node/Skill smoke tests; GitHub Actions runs test suite on push/PR. A self-to-self gateway round-trip does not establish official A2A 1.0 conformance.
 
-Research tracks: protocol compatibility and conformance; secure multi-agent messaging; durable DAG orchestration; shared and private agent memory; multi-tenant isolation; human-in-the-loop approvals; MCP and SDK adapters; observability; billing and commercial deployment.
+## Long-term research and commercial development
 
-The repository is the **single source of truth** for future code and research changes. Record functional changes in [CHANGELOG.md](CHANGELOG.md), architectural decisions in versioned docs, and use tests/PR review before merging.
+Current priorities: [Issue #1](https://github.com/keyneszeng/Open-Agent-Mesh/issues/1) interoperability; [#2](https://github.com/keyneszeng/Open-Agent-Mesh/issues/2) security; [#3](https://github.com/keyneszeng/Open-Agent-Mesh/issues/3) durable orchestration; [#4](https://github.com/keyneszeng/Open-Agent-Mesh/issues/4) MCP/Skills; [#5](https://github.com/keyneszeng/Open-Agent-Mesh/issues/5) project memory; [#6](https://github.com/keyneszeng/Open-Agent-Mesh/issues/6) commercial validation.
 
-## Open source and commercial direction
+See [research on Cursor Agent collaboration](docs/RESEARCH_CURSOR_AGENT_COLLABORATION_2026-11-11.zh-CN.md), [commercial hypotheses](docs/COMMERCIAL_HYPOTHESES.zh-CN.md), and [roadmap](docs/ROADMAP.md).
 
-The current code is MIT licensed. Commercial opportunities—including hosted gateways, enterprise security, cross-team coordination, policy and audit, and metering—are **hypotheses for validation**, not revenue claims. Do not include secrets, client data, or third-party proprietary code in public commits.
+The current code is MIT licensed. Hosted gateways, enterprise controls, audit, governance and usage billing are research/market hypotheses, **not existing features or proven revenue**.
 
-## Background
+## Contribution rules and change tracking
 
-Inspired by open Agent-to-Agent collaboration patterns and the 2026 Cursor Projects multiplayer discussion. This repository contains an independent implementation, not Cursor internal code.
+The GitHub repository is the single source of truth. Contributors and AI agents must follow [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md), add tests and update [CHANGELOG.md](CHANGELOG.md) with every meaningful change, and use Issues and PRs for reviewable work. No background development or automatic repository updates occur unless corresponding automation is configured and running.
+
+## Sources and inspiration
+
+Independent implementation inspired by open agent collaboration patterns and Cursor Projects multiplayer ideas; it is **not** Cursor proprietary source code.
 
 - A2A: https://a2a-protocol.org/
 - MCP: https://modelcontextprotocol.io/
 - Cursor Projects: https://cursor.com/blog/projects-multiplayer
+
+**License:** MIT.
