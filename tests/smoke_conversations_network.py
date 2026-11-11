@@ -37,8 +37,8 @@ def ready(port):
     raise RuntimeError(f"Server {port} not ready")
 
 
-try:
-    with tempfile.TemporaryDirectory() as temp:
+with tempfile.TemporaryDirectory() as temp:
+    try:
         tmp = pathlib.Path(temp)
         remote_db = str(tmp / "remote.sqlite")
         front_config = tmp / "front.json"
@@ -81,12 +81,12 @@ try:
         print(json.dumps({"result": "PASS", "conversation_id": cid, "turns": len(conv["turns"]),
                           "messages": len(messages), "gateway_processes": 2,
                           "remote_a2a_context_propagation": "PASS", "http_adapter": "PASS"}))
-finally:
-    for proc in processes:
-        proc.terminate()
-    for proc in processes:
-        try:
-            proc.wait(timeout=4)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=3)
+    finally:
+        for proc in processes:
+            proc.terminate()
+        for proc in processes:
+            try:
+                proc.wait(timeout=4)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=3)
