@@ -31,3 +31,12 @@ This repository is the canonical source of truth for **Open Agent Mesh**, a long
 Update GitHub during every active project-development session. An ordinary chat cannot independently monitor future changes or run unattended background code; enable dedicated scheduled workflows or approved automations for recurring research.
 
 **Architecture:** A2A transports peer-agent tasks; MCP connects tools; Mesh coordinates scheduling, policy, shared context and governance. No peer Agent self-assertion overrides authorization.
+## Context-first product invariants (ADR-0002)
+
+- The platform supports two first-class modes: **Direct Flow** without a workspace/group and **Workspace Flow** with a persistent collaboration group. Never require a workspace for a basic multi-agent flow.
+- Both modes must share the **same goal-scoped, versioned, authoritative Context Engine**, policy enforcement, task/event journal, and artifact lineage; workspace conversations alone are not a source of truth.
+- A shared context is a **least-privilege, version-pinned view**, not blanket sharing of private agent/human memory, files, or credentials. Enforce server-side isolation, explicit revision and authorization on all reads/writes.
+- Every significant action must be attributable to an authenticated human or organization principal, a revocable scoped delegation and an Agent instance. An Agent can act for people, not impersonate them.
+- Human authorization, especially for deployment, money movement, deletion and privilege escalation, is never overridden by an Agent message or a claimed role.
+- Workspace enrollment and moving a Direct Flow into a workspace must not silently broaden information visibility; include negative tests for this and record provenance.
+- Until the context/workspace entities are coded and tested, label this an **accepted future architecture**, not shipped product functionality.

@@ -60,3 +60,29 @@ flowchart TD
 ```
 
 Conversation turns use stable idempotency keys, avoid arbitrary LLM tool execution, and stop auto relay on failed worker tasks. Only a human principal can initiate a bounded autonomous discussion or close the conversation. Agent claims are derived from bearer credential `agent_id`, not user-supplied role. See [conversation specification](CONVERSATIONS-v0.4.zh-CN.md).
+
+## Future architecture decision (ADR-0002, proposed implementation)
+
+The existing v0.5 project-fact and conversation stores are **not yet a complete unified Context Engine**. The following is the approved target, not a claim of implemented features.
+
+```mermaid
+flowchart TB
+    H[Human / organization principal] --> D[Revocable scoped delegation]
+    D --> P[Policy + identity / authorization]
+    G[Goal + authoritative context scope + immutable revisions] --> P
+    P --> X[Context view per agent and task]
+    X --> O[Shared scheduler / A2A / MCP / Skill adapters]
+    O --> A[Direct Flow - no workspace]
+    O --> B[Workspace Flow - optional group]
+    A --> J[Durable events, artifact provenance and approvals]
+    B --> J
+    J --> G
+```
+
+**Contract:** direct and workspace workflows share `goal_id`, `context_scope_id`, a pinned context revision, identity, delegation, task execution policy, artifacts and event journal. A workspace is optional and does not become the authority for project facts. A conversation is not a permission grant. Users must approve adding existing direct-flow context to a workspace and authorize each new member's visibility.
+
+Identity chain for externally-effectful work: authenticated `principal_id` → restricted `delegation_id` → `agent_instance_id` → `task_id` → auditable artifact. Human/org is accountable, but the Agent is not necessarily exclusively owned by a single person.
+
+**Data minimization:** server constructs a least-privilege `ContextView` for each task. Untrusted tool output, Agent dialogue and proposed edits cannot override global policy; user-private memory is not shared by default. Optimistic concurrency/version pinning and retrospective provenance are required.
+
+See [ADR-0002](adr/0002-context-first-dual-mode-and-human-delegation.md). No goal/context_scope/workspace/authority delegation API is currently implemented; continue to treat v0.5 as a single-replica prototype.
