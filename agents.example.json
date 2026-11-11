@@ -1,0 +1,28 @@
+{
+  "agents": [
+    {
+      "id": "echo",
+      "kind": "python",
+      "handler": "agentmesh.builtins:echo",
+      "name": "Echo Agent",
+      "description": "Returns the given input unchanged",
+      "skills": ["echo", "testing"]
+    },
+    {
+      "id": "uppercase",
+      "kind": "python",
+      "handler": "agentmesh.builtins:uppercase",
+      "name": "Uppercase Agent",
+      "description": "Uppercases a text payload",
+      "skills": ["text-transform"]
+    },
+    {
+      "id": "summarize-demo",
+      "kind": "python",
+      "handler": "agentmesh.builtins:summarize",
+      "name": "Demo Text Compressor",
+      "description": "Only removes whitespace and truncates; not an AI summarizer",
+      "skills": ["demo"]
+    }
+  ]
+}
