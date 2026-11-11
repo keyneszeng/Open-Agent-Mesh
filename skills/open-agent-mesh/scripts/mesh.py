@@ -47,6 +47,23 @@ def main():
     flow_get.add_argument('workflow_id')
     flow_cancel = commands.add_parser('workflow-cancel')
     flow_cancel.add_argument('workflow_id')
+    chat_new = commands.add_parser('chat-new', help='Create a conversation')
+    chat_new.add_argument('title')
+    chat_new.add_argument('agents', nargs='+')
+    chat_show = commands.add_parser('chat-show')
+    chat_show.add_argument('conversation_id')
+    chat_messages = commands.add_parser('chat-messages')
+    chat_messages.add_argument('conversation_id')
+    chat_send = commands.add_parser('chat-send')
+    chat_send.add_argument('conversation_id')
+    chat_send.add_argument('agent')
+    chat_send.add_argument('message')
+    chat_discuss = commands.add_parser('chat-discuss')
+    chat_discuss.add_argument('conversation_id')
+    chat_discuss.add_argument('prompt')
+    chat_discuss.add_argument('--rounds', type=int, default=4)
+    chat_close = commands.add_parser('chat-close')
+    chat_close.add_argument('conversation_id')
     facts = commands.add_parser('facts')
     facts.add_argument('project')
     put = commands.add_parser('put-fact')
@@ -69,6 +86,20 @@ def main():
         result = request('/v1/workflows/' + segment(args.workflow_id))
     elif args.command == 'workflow-cancel':
         result = request('/v1/workflows/' + segment(args.workflow_id) + '/cancel', 'POST')
+    elif args.command == 'chat-new':
+        result = request('/v1/conversations', 'POST', {'title': args.title, 'participants': args.agents})
+    elif args.command == 'chat-show':
+        result = request('/v1/conversations/' + segment(args.conversation_id))
+    elif args.command == 'chat-messages':
+        result = request('/v1/conversations/' + segment(args.conversation_id) + '/messages')
+    elif args.command == 'chat-send':
+        result = request('/v1/conversations/' + segment(args.conversation_id) + '/messages', 'POST',
+                         {'to': args.agent, 'text': args.message})
+    elif args.command == 'chat-discuss':
+        result = request('/v1/conversations/' + segment(args.conversation_id) + '/discussions', 'POST',
+                         {'prompt': args.prompt, 'rounds': args.rounds})
+    elif args.command == 'chat-close':
+        result = request('/v1/conversations/' + segment(args.conversation_id) + '/close', 'POST')
     elif args.command == 'facts':
         result = request('/v1/projects/' + segment(args.project) + '/facts')
     else:

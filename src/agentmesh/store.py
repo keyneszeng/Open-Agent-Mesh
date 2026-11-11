@@ -93,6 +93,11 @@ class Store:
         finally:
             db.close()
 
+    def by_request_key(self, owner: str, request_key: str) -> dict | None:
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM tasks WHERE owner=? AND request_key=?", (owner, request_key)).fetchone()
+        return dict(row) if row else None
+
     def get(self, task_id: str) -> dict | None:
         with self.connect() as db:
             row = db.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()

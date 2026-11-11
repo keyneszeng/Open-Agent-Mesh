@@ -16,7 +16,7 @@
 - Optional **Agent Skills**-format `SKILL.md` with a zero-dependency CLI for supported coding agents.
 - Versioned **shared project facts** with explicit project permissions and optimistic-concurrency revision checks.
 
-**v0.3:** Human-gated workflow approvals and stateless MCP 2026-07-28 JSON-response tool bridge (a limited subset). See [`docs/RELIABILITY-v0.3.zh-CN.md`](docs/RELIABILITY-v0.3.zh-CN.md).
+**v0.4:** Human-gated workflow approvals and stateless MCP 2026-07-28 JSON-response tool bridge (a limited subset). See [`docs/RELIABILITY-v0.3.zh-CN.md`](docs/RELIABILITY-v0.3.zh-CN.md).
 
 **Not yet implemented:** SSE streaming, push callbacks, A2A task continuation/multi-turn, file parts, Agent Card signatures, OAuth/OIDC, cross-org policies, externally verified human identity, distributed DAG ownership, retry/dead-letter queue, semantic skill matching, shared memory, cost budgeting, multi-tenancy, full protocol conformance, or native ChatGPT/Cursor/Claude integrations. Unsupported features are not advertised in Agent Cards.
 
@@ -160,3 +160,18 @@ The caller remains responsible for choosing and authorizing the DAG; this is **n
 ## v0.3 test rounds
 
 Run `python -m pytest -q`, `python tests/smoke_network.py`, `python tests/chaos_network.py`, and `python tests/stress_http.py` after `pip install -e ".[dev]"`. GitHub Actions repeats all four on Python 3.10, 3.12 and 3.13. The test plan is in [`docs/TEST_PLAN-v0.3.zh-CN.md`](docs/TEST_PLAN-v0.3.zh-CN.md). All demos use local loopback test tokens only; do not expose this MVP on the public Internet.
+
+
+## v0.4 — Durable Agent Conversation Engine
+
+**New:** multi-turn private conversations, authorized agent-to-agent posting, bounded rotating group discussions, durable transcripts, conversation-level audit events, idempotency, failure-stop and crash recovery. This is a first-party HTTP/MCP/Skill extension to the existing partial A2A 1.0 bridge—not full real-time chat or an A2A/MCP conformance certification.
+
+```python
+from agentmesh.client import MeshClient
+mesh = MeshClient("http://127.0.0.1:8765", "YOUR_AUTHORIZED_TOKEN")
+conv = mesh.create_conversation("Architecture review", ["uppercase", "echo"], max_turns=6)
+mesh.start_discussion(conv["id"], "Review the memory model", rounds=4)
+# Read conversation(conv['id']) and conversation_messages(conv['id']) until complete.
+```
+
+Agent identity is bound to the authenticated principal; high-risk gated agents cannot be called through a conversation. Automated relay only starts with explicit human instruction, is bounded to 2–20 turns and stops on failure. See [Chinese conversation design and API guide](docs/CONVERSATIONS-v0.4.zh-CN.md).

@@ -89,7 +89,8 @@ async def run_agent(spec: AgentSpec, *, task_id: str, value: Any,
             message_id = task_id  # stable id on retries
             rpc_id = str(uuid.uuid4())
             params = {"message": {"messageId": message_id, "role": "ROLE_USER",
-                                  "parts": [_part(value)]},
+                                  "parts": [_part(value)],
+                                  **({"contextId": context["_a2a_context_id"]} if context.get("_a2a_context_id") else {})},
                       "configuration": {"returnImmediately": False}}
             res = await client.post(spec.url, headers=headers, json={
                 "jsonrpc": "2.0", "id": rpc_id, "method": "SendMessage", "params": params,

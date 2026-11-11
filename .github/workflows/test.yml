@@ -28,3 +28,9 @@ jobs:
         run: python tests/chaos_network.py
       - name: Multi-client HTTP load and workflow fan-out
         run: python tests/stress_http.py
+      - name: v0.4 cross-gateway A2A + HTTP conversation
+        run: python tests/smoke_conversations_network.py
+      - name: v0.4 forced process crash with conversation recovery
+        run: python tests/chaos_conversations.py
+      - name: v0.4 concurrent bounded discussions
+        run: python tests/stress_conversations_http.py

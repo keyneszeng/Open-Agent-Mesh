@@ -18,6 +18,7 @@ from .config import AgentSpec, load_agents, load_tokens
 from .runner import run_agent
 from .store import Store, TERMINAL, public_task
 from .workflows import WorkflowEngine, install_workflow_api
+from .conversations import ConversationEngine, install_conversation_api
 
 
 class CreateTask(BaseModel):
@@ -31,6 +32,13 @@ class CreateTask(BaseModel):
 class FactChange(BaseModel):
     value: Any
     expected_revision: int = Field(ge=0)
+
+
+def _small_json(raw: str | None, limit: int = 800) -> str:
+    """Bound A2A conversational carry-over; never execute prior output as code."""
+    if raw is None:
+        return ""
+    return raw[:limit]
 
 
 STATES = {"submitted": "TASK_STATE_SUBMITTED", "working": "TASK_STATE_WORKING",
@@ -68,6 +76,7 @@ def create_app(*, config_path: str | None = None, db_path: str | None = None,
     if not 2 <= lease_seconds <= 3600:
         raise ValueError("MESH_LEASE_SECONDS must be 2..3600")
     workflows = WorkflowEngine(store)
+    conversations = ConversationEngine(store, blocked_agents={a.id for a in registry.values() if a.requires_approval})
 
     async def execute(row):
         task_id, lease_token = row["id"], row["lease_token"]
@@ -98,6 +107,7 @@ def create_app(*, config_path: str | None = None, db_path: str | None = None,
     async def worker():
         while True:
             workflows.tick()
+            conversations.tick()
             # Single-process async worker with bounded in-flight concurrency.
             while len(in_flight) < 4:
                 row = store.claim(lease_seconds=lease_seconds)
@@ -125,9 +135,10 @@ def create_app(*, config_path: str | None = None, db_path: str | None = None,
             if in_flight:
                 await asyncio.gather(*in_flight, return_exceptions=True)
 
-    app = FastAPI(title="Open Agent Mesh", version="0.3.0", lifespan=lifespan)
+    app = FastAPI(title="Open Agent Mesh", version="0.4.0", lifespan=lifespan)
     app.state.store = store
     app.state.workflows = workflows
+    app.state.conversations = conversations
 
     def identity(authorization: str | None = Header(default=None)) -> dict:
         if not authorization or not authorization.startswith("Bearer "):
@@ -178,7 +189,7 @@ def create_app(*, config_path: str | None = None, db_path: str | None = None,
                 "name": agent.name, "description": agent.description,
                 "supportedInterfaces": [{"url": f"{base}/a2a/{agent_id}",
                                          "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}],
-                "version": "0.3.0", "capabilities": {"streaming": False, "pushNotifications": False},
+                "version": "0.4.0", "capabilities": {"streaming": False, "pushNotifications": False},
                 "securitySchemes": {"bearer": {"httpAuthSecurityScheme": {"scheme": "Bearer"}}},
                 "security": [{"bearer": []}],
                 "defaultInputModes": ["text/plain", "application/json"],
@@ -190,7 +201,7 @@ def create_app(*, config_path: str | None = None, db_path: str | None = None,
         return {
             "name": "Open Agent Mesh Router", "description": "Route to a configured agent using params.metadata.meshTarget",
             "supportedInterfaces": [{"url": f"{base}/a2a", "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}],
-            "version": "0.3.0", "capabilities": {"streaming": False, "pushNotifications": False},
+            "version": "0.4.0", "capabilities": {"streaming": False, "pushNotifications": False},
             "securitySchemes": {"bearer": {"httpAuthSecurityScheme": {"scheme": "Bearer"}}},
             "security": [{"bearer": []}],
             "defaultInputModes": ["text/plain", "application/json"],
@@ -327,11 +338,40 @@ def create_app(*, config_path: str | None = None, db_path: str | None = None,
                     else:
                         raise ValueError("MVP supports text and data parts only")
                 value = values[0] if len(values) == 1 else values
+                if not isinstance(message["messageId"], str) or not 1 <= len(message["messageId"]) <= 128:
+                    raise ValueError("messageId must be a nonempty string (max 128)")
                 if message.get("taskId"):
-                    raise ValueError("Multi-turn messages to an existing task are not yet supported")
-                context = {"_a2a_context_id": message.get("contextId") or str(uuid.uuid5(uuid.NAMESPACE_URL, f"{profile['name']}:{target}:{message['messageId']}"))}
-                row = submit(CreateTask(to=target, input=value, context=context,
-                                        idempotency_key=f"a2a:{target}:{message['messageId']}"), profile)
+                    # A2A does not allow additions to completed tasks; the current
+                    # bridge cannot resume an input-required task in place.
+                    existing_task = owned(message["taskId"], profile, target)
+                    if message.get("contextId") and message["contextId"] != json.loads(existing_task["context_json"]).get("_a2a_context_id"):
+                        raise ValueError("contextId and taskId mismatch")
+                    raise ValueError("Task continuation is not supported; send a new message with contextId")
+                context_id = message.get("contextId") or str(uuid.uuid5(
+                    uuid.NAMESPACE_URL, f"{profile['name']}:{target}:{message['messageId']}"))
+                if not isinstance(context_id, str) or not 1 <= len(context_id) <= 128:
+                    raise ValueError("contextId must be a string of 1..128 characters")
+                request_key = f"a2a:{target}:{message['messageId']}"
+                existing = store.by_request_key(profile["name"], request_key)
+                if existing:
+                    if (existing["agent_id"] != target or json.loads(existing["input_json"]) != value or
+                        json.loads(existing["context_json"]).get("_a2a_context_id") != context_id):
+                        raise ValueError("Message id reused with a different payload or context")
+                    row = existing
+                else:
+                    # Reuse context across distinct A2A tasks; only same-owner
+                    # tasks are eligible, and keep the transferred history bounded.
+                    previous = []
+                    for prior in reversed(store.list(owner=profile["name"], limit=100)):
+                        prior_context = json.loads(prior["context_json"])
+                        if prior_context.get("_a2a_context_id") != context_id or prior["state"] != "completed":
+                            continue
+                        previous.append({"from": prior["agent_id"],
+                                         "input": _small_json(prior["input_json"]),
+                                         "output": _small_json(prior["output_json"])})
+                    context = {"_a2a_context_id": context_id, "_a2a_history": previous[-12:]}
+                    row = submit(CreateTask(to=target, input=value, context=context,
+                                            idempotency_key=request_key), profile)
                 configuration = params.get("configuration", {})
                 if not isinstance(configuration, dict):
                     raise ValueError("configuration must be an object")
@@ -381,8 +421,9 @@ def create_app(*, config_path: str | None = None, db_path: str | None = None,
         return await rpc(agent_id, request, profile)
 
     install_workflow_api(app, workflows, identity, registry, can_use, check_project)
+    install_conversation_api(app, conversations, identity, registry, can_use, check_project)
     from .mcp import install_mcp_api
     install_mcp_api(app, identity=identity, registry=registry, can_use=can_use,
                     submit=submit, owned=owned, workflows=workflows,
-                    check_project=check_project)
+                    check_project=check_project, conversations=conversations)
     return app
