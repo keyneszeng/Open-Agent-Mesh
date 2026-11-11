@@ -107,3 +107,30 @@ class MeshClient:
     def close_conversation(self, conversation_id):
         return self._call("/v1/conversations/" + urllib.parse.quote(conversation_id, safe="") +
                           "/close", "POST")
+
+    def conversation_stream(self, conversation_id, *, after=0, wait_seconds=20.0):
+        """Iterate resumable private Mesh SSE events; reconnect with last yielded seq.
+
+        This is a blocking generator (not an MCP session or A2A stream).
+        """
+        if not 0 <= after <= 2**63 - 1:
+            raise ValueError("Invalid event cursor")
+        params = urllib.parse.urlencode({"after": after, "wait_seconds": wait_seconds})
+        url = (self.base_url + "/v1/conversations/" +
+               urllib.parse.quote(conversation_id, safe="") + "/stream?" + params)
+        request = urllib.request.Request(url, headers={"Authorization":"Bearer " + self.token,
+            "Accept":"text/event-stream", "Cache-Control":"no-cache"})
+        with urllib.request.urlopen(request, timeout=wait_seconds + 15) as response:
+            if response.headers.get_content_type() != "text/event-stream":
+                raise RuntimeError("Mesh did not return an event stream")
+            event = {}
+            for data in response:
+                line = data.decode("utf-8").rstrip("\r\n")
+                if not line:
+                    if "data" in event:
+                        message = json.loads(event["data"])
+                        yield message
+                    event = {}
+                elif line.startswith("data:"):
+                    event["data"] = event.get("data", "") + line[5:].lstrip(" ")
+                # id/event/keepalive fields are retained in the JSON payload.

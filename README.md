@@ -1,4 +1,4 @@
-# Open Agent Mesh 0.3.0
+# Open Agent Mesh 0.5.0
 
 **让不同 Agent 在一个统一网络内交换任务。** A small, framework-independent, runnable multi-agent task gateway.
 
@@ -16,9 +16,9 @@
 - Optional **Agent Skills**-format `SKILL.md` with a zero-dependency CLI for supported coding agents.
 - Versioned **shared project facts** with explicit project permissions and optimistic-concurrency revision checks.
 
-**v0.4:** Human-gated workflow approvals and stateless MCP 2026-07-28 JSON-response tool bridge (a limited subset). See [`docs/RELIABILITY-v0.3.zh-CN.md`](docs/RELIABILITY-v0.3.zh-CN.md).
+**v0.3:** Human-gated workflow approvals and stateless MCP 2026-07-28 JSON-response tool bridge (a limited subset). See [`docs/RELIABILITY-v0.3.zh-CN.md`](docs/RELIABILITY-v0.3.zh-CN.md).
 
-**Not yet implemented:** SSE streaming, push callbacks, A2A task continuation/multi-turn, file parts, Agent Card signatures, OAuth/OIDC, cross-org policies, externally verified human identity, distributed DAG ownership, retry/dead-letter queue, semantic skill matching, shared memory, cost budgeting, multi-tenancy, full protocol conformance, or native ChatGPT/Cursor/Claude integrations. Unsupported features are not advertised in Agent Cards.
+**Not yet implemented:** provider-independent browser push, push callbacks, A2A task continuation/multi-turn, file parts, Agent Card signatures, OAuth/OIDC, cross-org policies, externally verified human identity, distributed DAG ownership, retry/dead-letter queue, semantic skill matching, shared memory, cost budgeting, multi-tenancy, full protocol conformance, or native ChatGPT/Cursor/Claude integrations. A2A streaming is available as a limited subset and is advertised in Agent Cards; unsupported operations are not advertised.
 
 ## Quick start
 
@@ -175,3 +175,20 @@ mesh.start_discussion(conv["id"], "Review the memory model", rounds=4)
 ```
 
 Agent identity is bound to the authenticated principal; high-risk gated agents cannot be called through a conversation. Automated relay only starts with explicit human instruction, is bounded to 2–20 turns and stops on failure. See [Chinese conversation design and API guide](docs/CONVERSATIONS-v0.4.zh-CN.md).
+
+## v0.5 — Live cross-platform Agent conversations
+
+Open Agent Mesh now supports **real-time token deltas** from configured `http_sse` and `a2a_stream` adapters. Other adapters continue to emit completed messages and lifecycle updates only. Streaming is a durable **private Mesh SSE feed**, with separate A2A 1.0 JSON-RPC streaming subsets for agents. See [`docs/REALTIME-v0.5.zh-CN.md`](docs/REALTIME-v0.5.zh-CN.md) for contracts, permissions, replay guarantees, and limitations.
+
+```python
+from agentmesh.client import MeshClient
+m = MeshClient("http://127.0.0.1:8765", "AUTHORIZED_TOKEN")
+cid = m.create_conversation("Review", ["streaming-agent", "remote-a2a"], max_turns=4)["id"]
+# Open a separate thread/process and listen while another caller posts a message:
+for event in m.conversation_stream(cid, after=0, wait_seconds=20):
+    print(event["seq"], event["kind"], event["data"])
+```
+
+Clients send messages via authenticated `POST /v1/conversations/{id}/messages` while subscribing via authenticated `GET /v1/conversations/{id}/stream`. Reconnect using `Last-Event-ID: <last-seq>` or `?after=<last-seq>`. Browser clients use streaming `fetch()` with Authorization headers (not the bare EventSource API). Delta fragments are untrusted and provisional; only the final agent message is canonical. The gateway does not automatically integrate with closed-source ChatGPT/Cursor/Claude consumer sessions.
+
+Verification: `pytest -q`; `python tests/smoke_streaming_v05.py`; `python tests/chaos_streaming_v05.py`; `python tests/stress_streaming_v05.py`. All scripts start local test processes only.

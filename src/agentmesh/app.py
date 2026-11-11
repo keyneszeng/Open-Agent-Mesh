@@ -11,7 +11,8 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
+import time
 from pydantic import BaseModel, Field
 
 from .config import AgentSpec, load_agents, load_tokens
@@ -89,10 +90,19 @@ def create_app(*, config_path: str | None = None, db_path: str | None = None,
 
         keeper = asyncio.create_task(heartbeat())
         try:
+            async def on_delta(piece: str):
+                if not store.append_delta(task_id, lease_token, piece):
+                    raise RuntimeError("Task streaming lease invalidated")
+                conversation_id = json.loads(row["context_json"]).get("_mesh_conversation_id")
+                if conversation_id:
+                    if not conversations.emit_delta(conversation_id, task_id, lease_token, piece):
+                        # Fail closed on lost lease or closed conversation.
+                        raise RuntimeError("Conversation streaming lease invalidated")
+
             output = await run_agent(registry[row["agent_id"]], task_id=task_id,
                                      value=json.loads(row["input_json"]),
                                      context=json.loads(row["context_json"]),
-                                     parent_id=row["parent_id"])
+                                     parent_id=row["parent_id"], on_delta=on_delta)
             store.finish(task_id, "completed", output=output, lease_token=lease_token)
         except asyncio.CancelledError:
             # Keep lease until it expires; another process can safely reclaim it.
@@ -135,7 +145,7 @@ def create_app(*, config_path: str | None = None, db_path: str | None = None,
             if in_flight:
                 await asyncio.gather(*in_flight, return_exceptions=True)
 
-    app = FastAPI(title="Open Agent Mesh", version="0.4.0", lifespan=lifespan)
+    app = FastAPI(title="Open Agent Mesh", version="0.5.0", lifespan=lifespan)
     app.state.store = store
     app.state.workflows = workflows
     app.state.conversations = conversations
@@ -189,7 +199,7 @@ def create_app(*, config_path: str | None = None, db_path: str | None = None,
                 "name": agent.name, "description": agent.description,
                 "supportedInterfaces": [{"url": f"{base}/a2a/{agent_id}",
                                          "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}],
-                "version": "0.4.0", "capabilities": {"streaming": False, "pushNotifications": False},
+                "version": "0.5.0", "capabilities": {"streaming": True, "pushNotifications": False},
                 "securitySchemes": {"bearer": {"httpAuthSecurityScheme": {"scheme": "Bearer"}}},
                 "security": [{"bearer": []}],
                 "defaultInputModes": ["text/plain", "application/json"],
@@ -201,7 +211,7 @@ def create_app(*, config_path: str | None = None, db_path: str | None = None,
         return {
             "name": "Open Agent Mesh Router", "description": "Route to a configured agent using params.metadata.meshTarget",
             "supportedInterfaces": [{"url": f"{base}/a2a", "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}],
-            "version": "0.4.0", "capabilities": {"streaming": False, "pushNotifications": False},
+            "version": "0.5.0", "capabilities": {"streaming": True, "pushNotifications": False},
             "securitySchemes": {"bearer": {"httpAuthSecurityScheme": {"scheme": "Bearer"}}},
             "security": [{"bearer": []}],
             "defaultInputModes": ["text/plain", "application/json"],
@@ -295,6 +305,63 @@ def create_app(*, config_path: str | None = None, db_path: str | None = None,
         owned(task_id, profile)
         return store.events(task_id)
 
+    def a2a_stream_response(row: dict, rpc_id: Any, request: Request):
+        """A2A JSON-RPC SSE stream: initial Task, status and optional artifact deltas."""
+        def frame(payload: dict):
+            return "data: " + json.dumps({"jsonrpc":"2.0","id":rpc_id,"result":payload},
+                                         ensure_ascii=False,separators=(",", ":")) + "\n\n"
+
+        async def generate():
+            nonlocal row
+            yield frame({"task":a2a_task(row)})
+            if row["state"] in TERMINAL:
+                return
+            seen_events = 0
+            seen_deltas = 0
+            last_ping = time.monotonic()
+            deadline = last_ping + 360
+            while time.monotonic() < deadline:
+                if await request.is_disconnected():
+                    return
+                # Check intermediate status, then deltas, then terminal state.
+                rows = store.events(row["id"])
+                for event in rows:
+                    if event["seq"] <= seen_events:
+                        continue
+                    seen_events = event["seq"]
+                    if event["state"] in ("submitted","working"):
+                        yield frame({"statusUpdate":{"taskId":row["id"],
+                            "contextId":a2a_task(row)["contextId"],
+                            "status":{"state":STATES[event["state"]],"timestamp":event["created_at"]},
+                            "final":False}})
+                for delta in store.deltas(row["id"], after=seen_deltas):
+                    seen_deltas = delta["seq"]
+                    yield frame({"artifactUpdate":{"taskId":row["id"],
+                        "contextId":a2a_task(row)["contextId"],
+                        "artifact":{"artifactId":"live","parts":[{"text":delta["content"]}]},
+                        "append":seen_deltas>1,"lastChunk":False}})
+                row = store.get(row["id"])
+                if row["state"] in TERMINAL:
+                    # A2A lifecycle: initial Task, zero or more updates, terminal status.
+                    if row["state"] == "completed":
+                        artifact = a2a_task(row).get("artifacts", [{}])[0]
+                        yield frame({"artifactUpdate":{"taskId":row["id"],
+                            "contextId":a2a_task(row)["contextId"],
+                            "artifact":artifact,"append":False,"lastChunk":True}})
+                    yield frame({"statusUpdate":{"taskId":row["id"],
+                        "contextId":a2a_task(row)["contextId"],
+                        "status":{"state":STATES[row["state"]],"timestamp":row["updated_at"]},
+                        "final":True}})
+                    return
+                if time.monotonic() - last_ping > 3:
+                    yield ": keepalive\n\n"
+                    last_ping = time.monotonic()
+                await asyncio.sleep(.10)
+
+        return StreamingResponse(generate(), media_type="text/event-stream",
+                                 headers={"Cache-Control":"no-cache, no-transform",
+                                          "X-Accel-Buffering":"no", "X-Content-Type-Options":"nosniff"})
+
     async def rpc(agent_id: str | None, request: Request, profile: dict):
         version = request.headers.get("A2A-Version")
         if version != "1.0":
@@ -312,7 +379,7 @@ def create_app(*, config_path: str | None = None, db_path: str | None = None,
         try:
             if not isinstance(params, dict):
                 raise ValueError("params must be an object")
-            if method == "SendMessage":
+            if method in ("SendMessage", "SendStreamingMessage"):
                 metadata = params.get("metadata", {})
                 if not isinstance(metadata, dict):
                     raise ValueError("metadata must be an object")
@@ -378,12 +445,22 @@ def create_app(*, config_path: str | None = None, db_path: str | None = None,
                 immediate = configuration.get("returnImmediately", False)
                 if not isinstance(immediate, bool):
                     raise ValueError("returnImmediately must be boolean")
+                if method == "SendStreamingMessage":
+                    return a2a_stream_response(row, rpc_id, request)
                 if not immediate:
                     # Spec default: block for terminal state. Agent timeouts are bounded.
                     while row["state"] not in TERMINAL:
                         await asyncio.sleep(.075)
                         row = store.get(row["id"])
                 return {"jsonrpc": "2.0", "id": rpc_id, "result": {"task": a2a_task(row)}}
+            if method == "SubscribeToTask":
+                if not isinstance(params.get("id"), str):
+                    raise ValueError("Task id required")
+                row = owned(params["id"], profile, agent_id)
+                if row["state"] in TERMINAL:
+                    return {"jsonrpc":"2.0","id":rpc_id,"error":{
+                        "code":-32602,"message":"Cannot subscribe to terminal task"}}
+                return a2a_stream_response(row, rpc_id, request)
             if method in ("GetTask", "CancelTask"):
                 if not isinstance(params.get("id"), str):
                     raise ValueError("Task id required")

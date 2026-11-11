@@ -1,4 +1,4 @@
-# Open Agent Mesh — 通用 Agent 协作网关 v0.4
+# Open Agent Mesh — 通用 Agent 协作网关 v0.5
 
 本项目旨在提炼 Cursor Projects 类似的跨 Agent 协作思想，用开放标准实现一个**与具体大模型厂商无关的通用协作层**。
 
@@ -18,7 +18,8 @@
 | MCP 工具接口 | 2026-07-28 JSON-response 子集，五个工具 | **v0.3 部分实现** |
 | 人工审批 | 高风险 Agent 配置强制审批，双身份审核、审计 | **v0.3 已实现基础门禁** |
 | 持久化租约与恢复 | SQLite task 租约、心跳、过期恢复和旧 Worker 防写 | **v0.3 已实现基础能力** |
-| SSE、生产级分布式执行 | 多副本调度、全量协议、企业安全 | 仍待研发 |
+| 实时对话 SSE（v0.5） | 持久化事件、断线补收、Token 分片与 A2A JSON-RPC 流式子集 | **已实现基础能力，非完整协议认证** |
+| 生产级分布式执行 | 多副本调度、全量协议、企业安全 | 仍待研发 |
 
 ## 二、五分钟本地运行
 
@@ -77,7 +78,7 @@ python skills/open-agent-mesh/scripts/mesh.py workflow-get WORKFLOW_ID
 
 ## 七、仍需解决的工程问题
 
-当前不支持 A2A 1.0 的全部功能，例如流式 SSE、推送通知、文件类型、会话中断后继续、全面的多租户和完整协议信息校验。执行采用单机 SQLite 与内存调度；租约到期后重新执行的远端任务仍可能有重复副作用，取消并不撤销远端副作用。需要在生产之前完成持久化工作租约、幂等执行、访问审计、限流、OIDC/mTLS、Agent Card 校验、人工审批和第三方一致性测试。
+当前不支持 A2A 1.0 的全部功能，例如推送通知、文件类型、会话中断后继续、全面的多租户和完整协议信息校验。执行采用单机 SQLite 与内存调度；租约到期后重新执行的远端任务仍可能有重复副作用，取消并不撤销远端副作用。需要在生产之前完成持久化工作租约、幂等执行、访问审计、限流、OIDC/mTLS、Agent Card 校验、人工审批和第三方一致性测试。
 
 完整英文使用说明和配置示例请见 `README.md`，架构与安全清单请见 `docs/ARCHITECTURE.md`，后续研发路线请见 `docs/ROADMAP.md`。
 
@@ -95,3 +96,11 @@ python skills/open-agent-mesh/scripts/mesh.py workflow-get WORKFLOW_ID
 接入方式包括 Python `MeshClient`、通用 HTTP API、MCP 工具子集，以及 Agent Skill `chat-*` 命令。使用示例、完整边界与多轮测试见 [v0.4 跨 Agent 对话设计说明](docs/CONVERSATIONS-v0.4.zh-CN.md)。
 
 **注意：** 提供的是持久化、限轮的会话协调原型，不是已经验证的 ChatGPT/Claude/Cursor 原生直连，也不是实时 WebSocket 聊天或完整 A2A/MCP 一致性实现。
+
+## 十、v0.5：真实流式跨 Agent 对话
+
+v0.5 新增 **实时 SSE 事件推送**：参与会话的 Agent 通过已获授权的 HTTP SSE 或 A2A 流式适配器逐片返回文本，客户端在结果完成之前就能看到 `delta` 事件；消息和状态事件保存在 SQLite，断线后通过 `Last-Event-ID` 或 `after` 补收。系统仍保留原有角色隔离、审批门禁、上下文关联和有限轮数。
+
+通用 Agent Skill 新增 `chat-stream`；Python `MeshClient.conversation_stream()` 可持续监听。详见 [v0.5 实时通信技术说明](docs/REALTIME-v0.5.zh-CN.md)，里面包含对接示例、协议格式、测试方法、安全注意事项与尚未实现的内容。
+
+**重要限制：** 当前不是 WhatsApp 式无限期长连接、不是 MCP 官方订阅通道，不保证跨厂商商业客户端原生直连，也不保证外部 Agent 操作仅执行一次。恢复重试可能重放临时片段；必须以最终消息作为可信交付。商业发布前仍需要 HTTPS、OIDC、租户隔离、审计与预算控制。

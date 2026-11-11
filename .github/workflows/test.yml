@@ -1,4 +1,4 @@
-name: multi-round verification
+name: multi-round verification v0.5
 on: [push, pull_request]
 jobs:
   python-matrix:
@@ -34,3 +34,9 @@ jobs:
         run: python tests/chaos_conversations.py
       - name: v0.4 concurrent bounded discussions
         run: python tests/stress_conversations_http.py
+      - name: v0.5 independent HTTP SSE and A2A token-first delivery
+        run: python tests/smoke_streaming_v05.py
+      - name: v0.5 streaming SIGKILL and attempt fencing
+        run: python tests/chaos_streaming_v05.py
+      - name: v0.5 streaming concurrent load
+        run: python tests/stress_streaming_v05.py

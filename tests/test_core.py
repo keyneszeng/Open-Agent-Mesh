@@ -112,7 +112,7 @@ def test_card_is_public_and_versioned(client):
     assert card["supportedInterfaces"][0]["protocolVersion"] == "1.0"
     assert card["supportedInterfaces"][0]["url"].endswith("/a2a/echo")
     assert card["security"] == [{"bearer": []}]
-    assert card["capabilities"]["streaming"] is False
+    assert card["capabilities"]["streaming"] is True
 
 
 def rpc(method, params, id=7):
